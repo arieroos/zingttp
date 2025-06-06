@@ -1,0 +1,28 @@
+# https://www.crockford.com/mckeeman.html
+
+expression
+    "EXIT"
+    command argument
+
+command
+    "GET"
+    "POST"
+    "PUT"
+    "DELETE"
+    "HEAD"
+    "OPTIONS"
+    "TRACE"
+    "CONNECT"
+    "PATCH"
+
+argument
+    characters
+
+characters
+    character
+    character characters
+
+character
+    '0021' . 'Z'
+    'a' . 'z'
+
