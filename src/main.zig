@@ -26,7 +26,7 @@ pub fn main() !void {
 
         var tokenList = scanner.scan(line, gpa.allocator()) catch |err| blk: {
             _ = try std.io.getStdErr().writer().print("{s}\n", .{try getError(err)});
-            break :blk std.ArrayList(scanner.Token).init(gpa.allocator());
+            break :blk std.ArrayList(scanner.TokenInfo).init(gpa.allocator());
         };
         defer tokenList.deinit();
 
@@ -35,13 +35,13 @@ pub fn main() !void {
             continue;
         }
 
-        if (tokens[0].type.isKeyword(scanner.Keyword.EXIT)) {
+        if (tokens[0].token.isKeyword(scanner.Keyword.EXIT)) {
             break;
         }
 
         for (tokens) |token| {
             var toStrBuffer: [32]u8 = undefined;
-            const typeStr = token.type.toString(&toStrBuffer);
+            const typeStr = token.token.toString(&toStrBuffer);
             try stdout.print("--- {s} for {s} at {}\n", .{ typeStr, token.lexeme, token.pos });
         }
     }
@@ -49,7 +49,7 @@ pub fn main() !void {
 
 const expect = std.testing.expect;
 
-test "testing works" {
+test {
     std.testing.refAllDecls(@This());
     try expect(true);
 }

@@ -1,13 +1,13 @@
 const std = @import("std");
 
-const TokenType = union(enum) {
+pub const Token = union(enum) {
     value: []const u8,
     keyword: Keyword,
 
-    pub fn toString(self: TokenType, buffer: []u8) []u8 {
+    pub fn toString(self: Token, buffer: []u8) []u8 {
         const typeStr, const valStr = switch (self) {
-            TokenType.value => .{ "value", self.value },
-            TokenType.keyword => .{ "keyword", @tagName(self.keyword) },
+            Token.value => .{ "value", self.value },
+            Token.keyword => .{ "keyword", @tagName(self.keyword) },
         };
 
         const maxValLen = @max(buffer.len - typeStr.len - 2, 0);
@@ -18,18 +18,17 @@ const TokenType = union(enum) {
         return std.fmt.bufPrint(buffer, "{s}: {s}", .{ typeStr, printVal }) catch buffer;
     }
 
-    pub fn isKeyword(self: TokenType, keyword: Keyword) bool {
+    pub fn isKeyword(self: Token, keyword: Keyword) bool {
         return switch (self) {
-            TokenType.value => false,
-            TokenType.keyword => self.keyword == keyword,
+            Token.value => false,
+            Token.keyword => self.keyword == keyword,
         };
     }
 };
 
 pub const Keyword = enum(u8) {
-    // keywords
     EXIT,
-    // keywords - http
+    // HTTP methods
     GET,
     POST,
     PUT,
@@ -40,16 +39,16 @@ pub const Keyword = enum(u8) {
     CONNECT,
 };
 
-pub const Token = struct { type: TokenType, lexeme: []const u8, pos: usize };
+pub const TokenInfo = struct { token: Token, lexeme: []const u8, pos: usize };
 
 pub const ScannerError = error{
     LineDoesNotStartWithKeyword,
 };
 
-pub fn scan(line: []const u8, allocator: std.mem.Allocator) !std.ArrayList(Token) {
+pub fn scan(line: []const u8, allocator: std.mem.Allocator) !std.ArrayList(TokenInfo) {
     var start: usize = 0;
 
-    var tokenList = std.ArrayList(Token).init(allocator);
+    var tokenList = std.ArrayList(TokenInfo).init(allocator);
 
     while (start < line.len) {
         const end = scanNextToken(line, start);
@@ -58,13 +57,13 @@ pub fn scan(line: []const u8, allocator: std.mem.Allocator) !std.ArrayList(Token
             const lexeme = line[start..end];
             const tokenType = if (tokenList.items.len == 0)
                 if (std.meta.stringToEnum(Keyword, lexeme)) |keyword|
-                    TokenType{ .keyword = keyword }
+                    Token{ .keyword = keyword }
                 else
                     return ScannerError.LineDoesNotStartWithKeyword
             else
-                TokenType{ .value = lexeme };
+                Token{ .value = lexeme };
 
-            try tokenList.append(Token{ .type = tokenType, .lexeme = lexeme, .pos = start });
+            try tokenList.append(TokenInfo{ .token = tokenType, .lexeme = lexeme, .pos = start });
         }
 
         start = end + 1;
@@ -88,14 +87,14 @@ test "token type toString should work for large value" {
     const str = "This_is_a_very_long_string,_it_must_have_at_least_128_characters_in_my_opinions,_though_121_should_be_fine_too!JustMakeSureItIsVeryLong...";
 
     var buffer: [32]u8 = undefined;
-    const testTokenType = TokenType{ .value = str };
+    const testTokenType = Token{ .value = str };
     try expect(std.mem.startsWith(u8, testTokenType.toString(&buffer), "value: This_is_a_very_long_strin"));
 }
 
 test scan {
     const exitToken = try scan("EXIT", testAllocator);
     defer exitToken.deinit();
-    try expect(exitToken.items[0].type.keyword == Keyword.EXIT);
+    try expect(exitToken.items[0].token.keyword == Keyword.EXIT);
     try expect(std.mem.eql(u8, exitToken.items[0].lexeme, "EXIT"));
     try expect(exitToken.items[0].pos == 0);
 
@@ -103,17 +102,18 @@ test scan {
     defer getTokens.deinit();
 
     const firstToken = getTokens.items[0];
-    try expect(firstToken.type.keyword == Keyword.GET);
+    try expect(firstToken.token.keyword == Keyword.GET);
     try expect(std.mem.eql(u8, firstToken.lexeme, "GET"));
     try expect(firstToken.pos == 0);
 
     const secondToken = getTokens.items[1];
-    try expect(std.mem.eql(u8, secondToken.type.value, "http://some_site.com"));
+    try expect(std.mem.eql(u8, secondToken.token.value, "http://some_site.com"));
     try expect(std.mem.eql(u8, secondToken.lexeme, "http://some_site.com"));
     try expect(secondToken.pos == 4);
 
     const ret = scan("hjjj", testAllocator);
-    if (ret) |_| {
+    if (ret) |tokenList| {
+        defer tokenList.deinit();
         try expect(false);
     } else |err| {
         try expect(err == ScannerError.LineDoesNotStartWithKeyword);
@@ -140,7 +140,7 @@ test "scan works with long strings" {
     defer tokens.deinit();
 
     var buffer: [32]u8 = undefined;
-    try expect(std.mem.startsWith(u8, tokens.items[1].type.toString(&buffer), "value: This_is_a_very_long_strin"));
+    try expect(std.mem.startsWith(u8, tokens.items[1].token.toString(&buffer), "value: This_is_a_very_long_strin"));
 }
 
 test "scanNextToken scans single token" {
