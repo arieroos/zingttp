@@ -13,7 +13,7 @@ pub fn getError(err: anyerror) ![]const u8 {
 }
 
 pub fn main() !void {
-    try stdout.print("ZingHTL: Zing HTTP Testing Language\n", .{});
+    try stdout.print("ZingTTP: A Language for Testing HTTP Services \n", .{});
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
