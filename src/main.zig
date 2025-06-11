@@ -18,22 +18,18 @@ pub fn main() !void {
 
         const line = try stdin.readUntilDelimiter(&inputBuffer, '\n');
 
-        var tokenList = try scanner.scan(line, gpa.allocator());
-        defer tokenList.deinit();
+        var tokens = try scanner.scan(line, gpa.allocator());
+        defer tokens.deinit();
 
-        const tokens = tokenList.items;
-        if (tokens.len == 0) {
-            continue;
-        }
-
-        if (tokens[0].token.isKeyword(scanner.Keyword.EXIT)) {
-            break;
-        }
-
-        for (tokens) |token| {
-            var toStrBuffer: [32]u8 = undefined;
-            const typeStr = token.token.toString(&toStrBuffer);
-            try stdout.print("--- {s} for {s} at {}\n", .{ typeStr, token.lexeme, token.pos });
+        const expression = try parser.parse(tokens);
+        switch (expression) {
+            .nothing => continue,
+            .exit => {
+                try stdout.print("Bye!\n", .{});
+                break;
+            },
+            .invalid => |msg| try stdout.print("Error: {s}\n", .{msg}),
+            .command => |cmd| try stdout.print("{s} command for {s}\n", .{ cmd.command, cmd.argument }),
         }
     }
 }
