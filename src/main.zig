@@ -4,13 +4,7 @@ const stdin = std.io.getStdIn().reader();
 const stdout = std.io.getStdOut().writer();
 
 pub const scanner = @import("scanner.zig");
-
-pub fn getError(err: anyerror) ![]const u8 {
-    return switch (err) {
-        scanner.ScannerError.LineDoesNotStartWithKeyword => "Every line should start with a keyword!",
-        else => err,
-    };
-}
+pub const parser = @import("parser.zig");
 
 pub fn main() !void {
     try stdout.print("ZingTTP: A Language for Testing HTTP Services \n", .{});
@@ -24,10 +18,7 @@ pub fn main() !void {
 
         const line = try stdin.readUntilDelimiter(&inputBuffer, '\n');
 
-        var tokenList = scanner.scan(line, gpa.allocator()) catch |err| blk: {
-            _ = try std.io.getStdErr().writer().print("{s}\n", .{try getError(err)});
-            break :blk std.ArrayList(scanner.TokenInfo).init(gpa.allocator());
-        };
+        var tokenList = try scanner.scan(line, gpa.allocator());
         defer tokenList.deinit();
 
         const tokens = tokenList.items;
@@ -51,5 +42,4 @@ const expect = std.testing.expect;
 
 test {
     std.testing.refAllDecls(@This());
-    try expect(true);
 }

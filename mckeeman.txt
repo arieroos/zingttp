@@ -1,8 +1,9 @@
 # https://www.crockford.com/mckeeman.html
 
 expression
+    ""
     "EXIT"
-    command argument
+    command '0020' argument
 
 command
     "GET"
