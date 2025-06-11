@@ -1,27 +1,42 @@
 const std = @import("std");
-
-const stdin = std.io.getStdIn().reader();
-const stdout = std.io.getStdOut().writer();
+pub const Allocator = std.mem.Allocator;
 
 pub const scanner = @import("scanner.zig");
 pub const parser = @import("parser.zig");
 
-pub fn main() !void {
-    try stdout.print("ZingTTP: A Language for Testing HTTP Services \n", .{});
+pub const repl = @import("repl.zig");
 
+const UserInterface = union(enum) {
+    repl: repl.StdRepl,
+
+    fn getNextLine(self: *UserInterface, alloc: Allocator) !?std.ArrayList(u8) {
+        switch (self.*) {
+            inline else => |*impl| return impl.getNextLine(alloc),
+        }
+    }
+
+    fn print(self: *UserInterface, comptime fmt: []const u8, args: anytype) !void {
+        switch (self.*) {
+            inline else => |*impl| return impl.print(fmt, args),
+        }
+    }
+};
+
+pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
 
-    var inputBuffer: [1024]u8 = undefined;
+    var ui = UserInterface{ .repl = try repl.InitStdRepl() };
+
     while (true) {
-        try stdout.print("> ", .{});
+        var line = try ui.getNextLine(gpa.allocator()) orelse break;
+        defer line.deinit();
 
-        const line = try stdin.readUntilDelimiter(&inputBuffer, '\n');
-
-        var tokens = try scanner.scan(line, gpa.allocator());
+        var tokens = try scanner.scan(line.items, gpa.allocator());
         defer tokens.deinit();
 
         const expression = try parser.parse(tokens);
+        const stdout = std.io.getStdOut().writer();
         switch (expression) {
             .nothing => continue,
             .exit => {
