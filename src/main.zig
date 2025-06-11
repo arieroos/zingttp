@@ -36,15 +36,14 @@ pub fn main() !void {
         defer tokens.deinit();
 
         const expression = try parser.parse(tokens);
-        const stdout = std.io.getStdOut().writer();
         switch (expression) {
             .nothing => continue,
             .exit => {
-                try stdout.print("Bye!\n", .{});
+                try ui.print("Bye!\n", .{});
                 break;
             },
-            .invalid => |msg| try stdout.print("Error: {s}\n", .{msg}),
-            .command => |cmd| try stdout.print("{s} command for {s}\n", .{ cmd.command, cmd.argument }),
+            .invalid => |inv| try ui.print("Error: {s}\n", .{inv.message}),
+            .command => |cmd| try ui.print("{s} command for {s}\n", .{ cmd.command, cmd.argument }),
         }
     }
 }

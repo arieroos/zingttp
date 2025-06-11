@@ -16,7 +16,7 @@ pub fn main() !void {
             continue;
         }
         runTest(t);
-        println("---", .{});
+        println("-----", .{});
     }
 }
 

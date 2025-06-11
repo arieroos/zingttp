@@ -10,11 +10,13 @@ const Command = struct {
     argument: []const u8,
 };
 
+const Invalid = struct { buffer: [1024]u8, message: []u8 };
+
 pub const Expression = union(enum) {
     nothing: void,
     exit: void,
     command: Command,
-    invalid: []const u8,
+    invalid: Invalid,
 };
 
 const InvalidReason = enum {
@@ -28,33 +30,32 @@ pub fn parse(tokenList: TokenList) !Expression {
     if (tokens.len < 1) {
         return Expression.nothing;
     }
-    var errorBuf: [1024]u8 = undefined;
 
     const keyword = switch (tokens[0].token) {
         .keyword => tokens[0].token.keyword,
-        else => return genInvalidExpression(InvalidReason.ShouldStartWithKeyword, &errorBuf, tokens[0]),
+        else => return genInvalidExpression(InvalidReason.ShouldStartWithKeyword, tokens[0]),
     };
 
     if (keyword == Keyword.EXIT) {
         if (tokens.len > 1) {
-            return genInvalidExpression(InvalidReason.UnexpectedToken, &errorBuf, tokens[1]);
+            return genInvalidExpression(InvalidReason.UnexpectedToken, tokens[1]);
         }
         return Expression.exit;
     }
 
     if (tokens.len > 2) {
-        return genInvalidExpression(InvalidReason.UnexpectedToken, &errorBuf, tokens[2]);
+        return genInvalidExpression(InvalidReason.UnexpectedToken, tokens[2]);
     }
     const cmd = @tagName(keyword);
     const arg = switch (tokens[1].token) {
         .value => tokens[1].token.value,
-        else => return genInvalidExpression(InvalidReason.UnexpectedKeyword, &errorBuf, tokens[1]),
+        else => return genInvalidExpression(InvalidReason.UnexpectedKeyword, tokens[1]),
     };
 
     return Expression{ .command = .{ .command = cmd, .argument = arg } };
 }
 
-fn genInvalidExpression(comptime reason: InvalidReason, buffer: []u8, token: scanner.TokenInfo) Expression {
+fn genInvalidExpression(comptime reason: InvalidReason, token: scanner.TokenInfo) Expression {
     const format = comptime switch (reason) {
         .ShouldStartWithKeyword => "Statement does not start with a keyword",
         .UnexpectedToken => "Unexpected token at {}: \"{s}\"",
@@ -65,10 +66,14 @@ fn genInvalidExpression(comptime reason: InvalidReason, buffer: []u8, token: sca
         .UnexpectedKeyword => .{ token.lexeme, token.pos },
         else => .{},
     };
-    return Expression{ .invalid = std.fmt.bufPrint(buffer, format, args) catch buffer };
+
+    var buffer: [1024]u8 = undefined;
+    const msg = std.fmt.bufPrint(&buffer, format, args) catch &buffer;
+    return Expression{ .invalid = Invalid{ .buffer = buffer, .message = msg } };
 }
 
 const expect = std.testing.expect;
+const expectEqualStrings = std.testing.expectEqualStrings;
 const testAllocator = std.testing.allocator;
 
 fn genTestTokenList(tokens: []const Token) !TokenList {
@@ -123,17 +128,16 @@ test parse {
 
         const expression = try parse(tokens);
         switch (expression) {
-            .invalid => try expect(true),
+            .invalid => |inv| try expectEqualStrings("Unexpected token at 4: \"gg\"", inv.message),
             else => try (expect(false)),
         }
     }
 }
 
 test "Generate Invalid Expresion For Unexpected Token" {
-    var buf: [128]u8 = undefined;
-    const msg = genInvalidExpression(InvalidReason.UnexpectedToken, &buf, scanner.TokenInfo{ .token = Token{ .keyword = Keyword.GET }, .lexeme = "GET", .pos = 77 });
+    const msg = genInvalidExpression(InvalidReason.UnexpectedToken, scanner.TokenInfo{ .token = Token{ .keyword = Keyword.GET }, .lexeme = "GET", .pos = 77 });
     switch (msg) {
-        .invalid => try expect(std.mem.eql(u8, msg.invalid, "Unexpected token at 77: \"GET\"")),
+        .invalid => |inv| try expectEqualStrings(inv.message, "Unexpected token at 77: \"GET\""),
         else => try expect(false),
     }
 }

@@ -57,8 +57,8 @@ test Repl {
     try expectEqualStrings("ZingTTP:", buffer[0..8]);
 
     testStream.reset();
-    try repl.print("hello", .{});
-    try expectEqualStrings("hello\n", buffer[0..6]);
+    try repl.print("hello {s}", .{"there"});
+    try expectEqualStrings("hello there\n", buffer[0..12]);
 
     try testStream.seekTo(2);
     _ = try testStream.write("Some line here\n");
