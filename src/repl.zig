@@ -24,7 +24,13 @@ pub fn Repl(comptime Reader: type, comptime Writer: type) type {
 
         pub fn getNextLine(self: *Self, buffer: []u8) ![]u8 {
             try self.stdout.print("> ", .{});
-            return stdin.readUntilDelimiterOrEof(buffer, '\n');
+
+            var bufStream = std.io.fixedBufferStream(buffer);
+            self.stdin.streamUntilDelimiter(bufStream.writer(), '\n', buffer.len) catch |err| switch (err) {
+                error.EndOfStream => {},
+                else => return err,
+            };
+            return bufStream.getWritten();
         }
 
         pub fn print(self: *Self, comptime fmt: []const u8, args: anytype) !void {
@@ -43,25 +49,22 @@ const testAlloc = std.testing.allocator;
 
 test Repl {
     var buffer: [1024]u8 = undefined;
-    var testStream = std.io.fixedBufferStream(&buffer);
-    const writer = testStream.writer();
-    const reader = testStream.reader();
+    var test_stream = std.io.fixedBufferStream(&buffer);
+    const writer = test_stream.writer();
+    const reader = test_stream.reader();
 
     var repl = try Repl(@TypeOf(reader), @TypeOf(writer)).init(reader, writer);
     try expectEqualStrings("ZingTTP:", buffer[0..8]);
 
-    testStream.reset();
+    test_stream.reset();
     try repl.print("hello {s}", .{"there"});
     try expectEqualStrings("hello there\n", buffer[0..12]);
 
-    try testStream.seekTo(2);
-    _ = try testStream.write("Some line here\n");
-    testStream.reset();
-    const line = try repl.getNextLine(testAlloc);
-    if (line) |l| {
-        defer l.deinit();
-        try expectEqualStrings("Some line here", l.items[0..14]);
-    } else {
-        try expect(false);
-    }
+    try test_stream.seekTo(2);
+    _ = try test_stream.write("Some line here\n");
+    test_stream.reset();
+
+    var line_buf: [1024]u8 = undefined;
+    const line = try repl.getNextLine(&line_buf);
+    try expectEqualStrings("Some line here", line);
 }
