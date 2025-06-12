@@ -13,26 +13,14 @@ pub const Keyword = enum(u8) {
     CONNECT,
 };
 
-pub const SyntaxError = union(enum) {
-    UnclosedQuote: u8,
-
-    pub fn toString(self: SyntaxError) []const u8 {
-        return switch (self) {
-            .UnclosedQuote => |q| "Unclosed Quote: " ++ .{q},
-        };
-    }
-};
-
 pub const Token = union(enum) {
     value: []const u8,
     keyword: Keyword,
-    invalid: SyntaxError,
 
     pub fn toString(self: Token, buffer: []u8) []u8 {
         const typeStr, const valStr = switch (self) {
             .value => |v| .{ "value", v },
             .keyword => |kw| .{ "keyword", @tagName(kw) },
-            .invalid => |inv| .{ "invalid", inv.toString() },
         };
 
         const maxValLen = @max(buffer.len - typeStr.len - 2, 0);
@@ -102,11 +90,13 @@ fn scanQuoted(line: []const u8, start: usize, quote: u8) usize {
 }
 
 fn getValueToken(lexeme: []const u8) Token {
-    const first = lexeme[0];
-    const last = lexeme[lexeme.len - 1];
-    const lexeme_value = switch (first) {
-        '"', '\'' => if (first == last) lexeme[1 .. lexeme.len - 1] else {
-            return Token{ .invalid = .{ .UnclosedQuote = first } };
+    const lexeme_value = switch (lexeme[0]) {
+        '"', '\'' => |first| qtd: {
+            const lastIdx = lexeme.len - 1;
+            break :qtd if (first == lexeme[lastIdx])
+                lexeme[1..lastIdx]
+            else
+                lexeme;
         },
         else => lexeme,
     };
@@ -115,14 +105,15 @@ fn getValueToken(lexeme: []const u8) Token {
 
 const expect = std.testing.expect;
 const expectEqualStrings = std.testing.expectEqualStrings;
-const testAllocator = std.testing.allocator;
+const expectStringStartsWith = std.testing.expectStringStartsWith;
+const test_allocator = std.testing.allocator;
 
 test "token.toString should work for large value" {
     const str = "This_is_a_very_long_string,_it_must_have_at_least_128_characters_in_my_opinions,_though_121_should_be_fine_too!JustMakeSureItIsVeryLong...";
 
     var buffer: [32]u8 = undefined;
     const testTokenType = Token{ .value = str };
-    try expect(std.mem.startsWith(u8, testTokenType.toString(&buffer), "value: This_is_a_very_long_strin"));
+    try expectStringStartsWith("value: This_is_a_very_long_strin", testTokenType.toString(&buffer));
 }
 
 fn expectTokenToBeKeywordAt(token: TokenInfo, kw: Keyword, position: usize) !void {
@@ -154,32 +145,33 @@ fn expectTokenToBeValueAt(token: TokenInfo, value: []const u8, position: usize) 
 
 test scan {
     {
-        const exitToken = try scan("EXIT", testAllocator);
-        defer exitToken.deinit();
-        try expectTokenToBeKeywordAt(exitToken.items[0], Keyword.EXIT, 0);
+        const tokens = try scan("EXIT", test_allocator);
+        defer tokens.deinit();
+        try expectTokenToBeKeywordAt(tokens.items[0], Keyword.EXIT, 0);
     }
     {
-        const getTokens = try scan("GET http://some_site.com", testAllocator);
-        defer getTokens.deinit();
+        const tokens = try scan("GET http://some_site.com", test_allocator);
+        defer tokens.deinit();
 
-        try expectTokenToBeKeywordAt(getTokens.items[0], Keyword.GET, 0);
-        try expectTokenToBeValueAt(getTokens.items[1], "http://some_site.com", 4);
+        try expectTokenToBeKeywordAt(tokens.items[0], Keyword.GET, 0);
+        try expectTokenToBeValueAt(tokens.items[1], "http://some_site.com", 4);
     }
     {
-        const tokens = try scan("PUT \"not a real site\"", testAllocator);
+        const test_val = "http://some_site.com/space=in url";
+        const tokens = try scan("PUT \"" ++ test_val ++ "\"", test_allocator);
         defer tokens.deinit();
 
         try expectTokenToBeKeywordAt(tokens.items[0], Keyword.PUT, 0);
-        try expectTokenToBeValueAt(tokens.items[1], "not a real site", 4);
+        try expectTokenToBeValueAt(tokens.items[1], test_val, 4);
     }
 }
 
 test "scan ignores spaces" {
-    var tokens = try scan("      ", testAllocator);
+    var tokens = try scan("      ", test_allocator);
     try expect(tokens.items.len == 0);
     tokens.deinit();
 
-    tokens = try scan("   DELETE     someURL  ", testAllocator);
+    tokens = try scan("   DELETE     someURL  ", test_allocator);
     defer tokens.deinit();
     try expect(tokens.items.len == 2);
     try expect(tokens.items[0].pos == 3);
@@ -189,12 +181,21 @@ test "scan ignores spaces" {
 test "scan works with long strings" {
     const str = "This_is_a_very_long_string,_it_must_have_at_least_128_characters_in_my_opinions,_though_121_should_be_fine_too!JustMakeSureItIsVeryLong...";
 
-    var copy: [256]u8 = undefined;
-    const tokens = try scan(try std.fmt.bufPrint(&copy, "CONNECT {s}", .{str}), testAllocator);
+    const tokens = try scan("CONNECT " ++ str, test_allocator);
     defer tokens.deinit();
 
     var buffer: [32]u8 = undefined;
-    try expect(std.mem.startsWith(u8, tokens.items[1].token.toString(&buffer), "value: This_is_a_very_long_strin"));
+    try expectStringStartsWith("value: This_is_a_very_long_strin", tokens.items[1].token.toString(&buffer));
+}
+
+test "scan can handle inner quotes" {
+    const testStrs: []const []const u8 = &.{ "0'23'5", "'123'5", "0'234'" };
+    for (testStrs) |testStr| {
+        const tokens = try scan(testStr, test_allocator);
+        defer tokens.deinit();
+
+        try expectTokenToBeValueAt(tokens.items[0], testStr, 0);
+    }
 }
 
 test "scanNextToken scans single token" {
@@ -223,14 +224,4 @@ test "scanQuoted scans inside quote" {
 
     try expectEqualStrings("12 45", testStr[1..end]);
     try expect(end == 6);
-}
-
-test "getValueToken returns error on unclosed quote" {
-    const testStr = "'12 45 7";
-    const token = getValueToken(testStr);
-
-    switch (token) {
-        .invalid => |i| try expectEqualStrings("Unclosed Quote: '", i.toString()),
-        else => try expect(false),
-    }
 }

@@ -24,17 +24,12 @@ const InvalidReason = enum {
     ShouldStartWithKeyword,
     UnexpectedToken,
     ExpectedValue,
-    InvalidToken,
 };
 
 pub fn parse(tokenList: TokenList) !Expression {
     const tokens = tokenList.items;
     if (tokens.len < 1) {
         return Expression.nothing;
-    }
-
-    if (findInvalidToken(tokens)) |invalid| {
-        return invalid;
     }
 
     const keyword = switch (tokens[0].token) {
@@ -61,27 +56,15 @@ pub fn parse(tokenList: TokenList) !Expression {
     return Expression{ .command = .{ .command = cmd, .argument = arg } };
 }
 
-fn findInvalidToken(tokens: []TokenInfo) ?Expression {
-    for (tokens) |token| {
-        switch (token.token) {
-            .invalid => return genInvalidExpression(InvalidReason.InvalidToken, token),
-            else => {},
-        }
-    }
-    return null;
-}
-
 fn genInvalidExpression(comptime reason: InvalidReason, token: TokenInfo) Expression {
     const format = comptime switch (reason) {
         .ShouldStartWithKeyword => "Statement does not start with keyword",
         .UnexpectedToken => "Unexpected token at {}: \"{s}\"",
         .ExpectedValue => "Unexpected {s} instead of value at {}: \"{s}\"",
-        .InvalidToken => "Syntax error at {}: {s}",
     };
     const args = switch (reason) {
         .UnexpectedToken => .{ token.pos, token.lexeme },
         .ExpectedValue => .{ @tagName(token.token), token.pos, token.lexeme },
-        .InvalidToken => .{ token.pos, token.token.invalid.toString() },
         else => .{},
     };
 
@@ -102,9 +85,6 @@ fn genTestTokenList(tokens: []const Token) !TokenList {
         const lexeme = switch (token) {
             .keyword => @tagName(token.keyword),
             .value => |v| v,
-            .invalid => |i| switch (i) {
-                .UnclosedQuote => |q| .{q} ++ "...",
-            },
         };
         try tokenList.append(TokenInfo{ .token = token, .lexeme = lexeme, .pos = lengthSoFar });
 
@@ -160,19 +140,6 @@ test "Generate Invalid Expresion For Unexpected Token" {
     const msg = genInvalidExpression(InvalidReason.UnexpectedToken, token);
     switch (msg) {
         .invalid => |inv| try expectEqualStrings(inv.message, "Unexpected token at 77: \"GET\""),
-        else => try expect(false),
-    }
-}
-
-test "Generate Invalid Expression For Invalid Token" {
-    const token = TokenInfo{
-        .token = Token{ .invalid = .{ .UnclosedQuote = '"' } },
-        .lexeme = "\"...",
-        .pos = 77,
-    };
-    const msg = genInvalidExpression(InvalidReason.InvalidToken, token);
-    switch (msg) {
-        .invalid => |inv| try expectEqualStrings("Syntax error at 77: Unclosed Quote: \"", inv.message),
         else => try expect(false),
     }
 }

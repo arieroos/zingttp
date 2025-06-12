@@ -1,4 +1,6 @@
 # https://www.crockford.com/mckeeman.html
+line
+    expression '000A'
 
 expression
     ""
@@ -18,12 +20,22 @@ command
 
 argument
     characters
+    quote optional quote
+
+quote
+    '"'
+    '''
+
+optional
+    ""
+    '0021'
+    characters
+    optional optional
 
 characters
     character
     character characters
 
 character
-    '0021' . 'Z'
-    'a' . 'z'
+    '0021' . '10FFF'
 
