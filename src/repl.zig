@@ -22,15 +22,9 @@ pub fn Repl(comptime Reader: type, comptime Writer: type) type {
             return Self{ .stdin = in, .stdout = out };
         }
 
-        pub fn getNextLine(self: *Self, alloc: std.mem.Allocator) !?std.ArrayList(u8) {
+        pub fn getNextLine(self: *Self, buffer: []u8) ![]u8 {
             try self.stdout.print("> ", .{});
-
-            var line = std.ArrayList(u8).init(alloc);
-            self.stdin.streamUntilDelimiter(line.writer(), '\n', null) catch |err| switch (err) {
-                error.EndOfStream => {},
-                else => return err,
-            };
-            return line;
+            return stdin.readUntilDelimiterOrEof(buffer, '\n');
         }
 
         pub fn print(self: *Self, comptime fmt: []const u8, args: anytype) !void {

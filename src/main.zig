@@ -9,9 +9,9 @@ pub const repl = @import("repl.zig");
 const UserInterface = union(enum) {
     repl: repl.StdRepl,
 
-    fn getNextLine(self: *UserInterface, alloc: Allocator) !?std.ArrayList(u8) {
+    fn getNextLine(self: *UserInterface, buffer: []u8) ![]u8 {
         switch (self.*) {
-            inline else => |*impl| return impl.getNextLine(alloc),
+            inline else => |*impl| return impl.getNextLine(buffer),
         }
     }
 
@@ -28,11 +28,10 @@ pub fn main() !void {
 
     var ui = UserInterface{ .repl = try repl.InitStdRepl() };
 
+    var lineBuffer: [1024]u8 = undefined;
     while (true) {
-        var line = try ui.getNextLine(gpa.allocator()) orelse break;
-        defer line.deinit();
-
-        var tokens = try scanner.scan(line.items, gpa.allocator());
+        const line = try ui.getNextLine(&lineBuffer);
+        var tokens = try scanner.scan(line, gpa.allocator());
         defer tokens.deinit();
 
         const expression = try parser.parse(tokens);
