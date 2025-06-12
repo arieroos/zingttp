@@ -13,14 +13,26 @@ pub const Keyword = enum(u8) {
     CONNECT,
 };
 
+pub const SyntaxError = union(enum) {
+    UnclosedQuote: u8,
+
+    pub fn toString(self: SyntaxError) []const u8 {
+        return switch (self) {
+            .UnclosedQuote => |q| "Unclosed Quote: " ++ .{q},
+        };
+    }
+};
+
 pub const Token = union(enum) {
     value: []const u8,
     keyword: Keyword,
+    invalid: SyntaxError,
 
     pub fn toString(self: Token, buffer: []u8) []u8 {
         const typeStr, const valStr = switch (self) {
-            Token.value => .{ "value", self.value },
-            Token.keyword => .{ "keyword", @tagName(self.keyword) },
+            .value => |v| .{ "value", v },
+            .keyword => |kw| .{ "keyword", @tagName(kw) },
+            .invalid => |inv| .{ "invalid", inv.toString() },
         };
 
         const maxValLen = @max(buffer.len - typeStr.len - 2, 0);
@@ -33,8 +45,8 @@ pub const Token = union(enum) {
 
     pub fn isKeyword(self: Token, keyword: Keyword) bool {
         return switch (self) {
-            Token.value => false,
-            Token.keyword => self.keyword == keyword,
+            .keyword => self.keyword == keyword,
+            else => false,
         };
     }
 };
@@ -56,7 +68,7 @@ pub fn scan(line: []const u8, allocator: std.mem.Allocator) !TokenList {
                 if (std.meta.stringToEnum(Keyword, lexeme)) |keyword|
                     Token{ .keyword = keyword }
                 else
-                    Token{ .value = lexeme };
+                    getValueToken(lexeme);
 
             try tokenList.append(TokenInfo{ .token = tokenType, .lexeme = lexeme, .pos = start });
         }
@@ -69,13 +81,40 @@ pub fn scan(line: []const u8, allocator: std.mem.Allocator) !TokenList {
 
 fn scanNextToken(line: []const u8, start: usize) usize {
     var current = start;
-    while (current < line.len and line[current] != ' ') {
-        current += 1;
+
+    while (current < line.len) {
+        const c = line[current];
+        switch (c) {
+            ' ' => break,
+            '"', '\'' => current = scanQuoted(line, current + 1, c),
+            else => current += 1,
+        }
     }
     return current;
 }
 
+fn scanQuoted(line: []const u8, start: usize, quote: u8) usize {
+    var idx = start;
+    while (idx < line.len and line[idx] != quote) {
+        idx += 1;
+    }
+    return idx;
+}
+
+fn getValueToken(lexeme: []const u8) Token {
+    const first = lexeme[0];
+    const last = lexeme[lexeme.len - 1];
+    const lexeme_value = switch (first) {
+        '"', '\'' => if (first == last) lexeme[1 .. lexeme.len - 1] else {
+            return Token{ .invalid = .{ .UnclosedQuote = first } };
+        },
+        else => lexeme,
+    };
+    return Token{ .value = lexeme_value };
+}
+
 const expect = std.testing.expect;
+const expectEqualStrings = std.testing.expectEqualStrings;
 const testAllocator = std.testing.allocator;
 
 test "token.toString should work for large value" {
@@ -87,9 +126,30 @@ test "token.toString should work for large value" {
 }
 
 fn expectTokenToBeKeywordAt(token: TokenInfo, kw: Keyword, position: usize) !void {
-    try expect(token.token.keyword == kw);
-    try expect(std.mem.eql(u8, token.lexeme, @tagName(kw)));
-    try expect(token.pos == position);
+    switch (token.token) {
+        .keyword => |actual_kw| {
+            try expect(actual_kw == kw);
+            try expectEqualStrings(token.lexeme, @tagName(kw));
+            try expect(token.pos == position);
+        },
+        else => try expect(false),
+    }
+}
+
+fn expectTokenToBeValueAt(token: TokenInfo, value: []const u8, position: usize) !void {
+    switch (token.token) {
+        .value => |val| {
+            try expectEqualStrings(value, val);
+
+            const indexOf = std.mem.indexOf(u8, token.lexeme, value);
+            if (indexOf) |i|
+                try expect(i == 0 or i == 1)
+            else
+                try expect(false);
+            try expect(token.pos == position);
+        },
+        else => try expect(false),
+    }
 }
 
 test scan {
@@ -101,12 +161,16 @@ test scan {
     {
         const getTokens = try scan("GET http://some_site.com", testAllocator);
         defer getTokens.deinit();
-        try expectTokenToBeKeywordAt(getTokens.items[0], Keyword.GET, 0);
 
-        const secondToken = getTokens.items[1];
-        try expect(std.mem.eql(u8, secondToken.token.value, "http://some_site.com"));
-        try expect(std.mem.eql(u8, secondToken.lexeme, "http://some_site.com"));
-        try expect(secondToken.pos == 4);
+        try expectTokenToBeKeywordAt(getTokens.items[0], Keyword.GET, 0);
+        try expectTokenToBeValueAt(getTokens.items[1], "http://some_site.com", 4);
+    }
+    {
+        const tokens = try scan("PUT \"not a real site\"", testAllocator);
+        defer tokens.deinit();
+
+        try expectTokenToBeKeywordAt(tokens.items[0], Keyword.PUT, 0);
+        try expectTokenToBeValueAt(tokens.items[1], "not a real site", 4);
     }
 }
 
@@ -139,9 +203,34 @@ test "scanNextToken scans single token" {
 }
 
 test "scanNextToken scans second token" {
-    const testStr = "012 456 789";
+    const testStr = "012 456 89";
     const end = scanNextToken(testStr, 4);
 
-    try expect(std.mem.eql(u8, testStr[4..end], "456"));
+    try expectEqualStrings("456", testStr[4..end]);
     try expect(end == 7);
+}
+
+test "scanNextToken scans entire quote" {
+    const testStr = "\"12 45\"";
+    const end = scanNextToken(testStr, 0);
+
+    try expectEqualStrings(testStr[0..end], testStr);
+}
+
+test "scanQuoted scans inside quote" {
+    const testStr = "'12 45'7";
+    const end = scanQuoted(testStr, 1, '\'');
+
+    try expectEqualStrings("12 45", testStr[1..end]);
+    try expect(end == 6);
+}
+
+test "getValueToken returns error on unclosed quote" {
+    const testStr = "'12 45 7";
+    const token = getValueToken(testStr);
+
+    switch (token) {
+        .invalid => |i| try expectEqualStrings("Unclosed Quote: '", i.toString()),
+        else => try expect(false),
+    }
 }

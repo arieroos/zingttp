@@ -16,12 +16,13 @@ pub fn main() !void {
             continue;
         }
         runTest(t);
-        println("-----", .{});
+        println("\n============================================================================\n", .{});
     }
 }
 
 fn runTest(testFn: std.builtin.TestFn) void {
     println("{s}:", .{testFn.name});
+    println("-------", .{});
     std.testing.allocator_instance = .{};
     const result = testFn.func();
 
