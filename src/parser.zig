@@ -6,7 +6,7 @@ const Token = scanner.Token;
 const TokenInfo = scanner.TokenInfo;
 const TokenList = scanner.TokenList;
 
-const Command = struct {
+pub const Command = struct {
     command: []const u8,
     argument: []const u8,
 };
