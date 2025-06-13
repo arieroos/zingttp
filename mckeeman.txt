@@ -1,6 +1,11 @@
 # https://www.crockford.com/mckeeman.html
 line
     expression '000A'
+    comment '000A'
+    expression comment '000A'
+
+comment
+    '#' optional
 
 expression
     ""
@@ -29,6 +34,7 @@ quote
 optional
     ""
     '0021'
+    '#'
     characters
     optional optional
 
@@ -37,5 +43,5 @@ characters
     character characters
 
 character
-    '0021' . '10FFF'
+    '0021' . '10FFF' - '#'
 

@@ -52,6 +52,11 @@ pub fn scan(line: []const u8, allocator: std.mem.Allocator) !TokenList {
 
         if (end > start) {
             const lexeme = line[start..end];
+
+            if (lexeme[0] == '#') {
+                break;
+            }
+
             const tokenType =
                 if (std.meta.stringToEnum(Keyword, lexeme)) |keyword|
                     Token{ .keyword = keyword }
@@ -74,6 +79,7 @@ fn scanNextToken(line: []const u8, start: usize) usize {
         const c = line[current];
         switch (c) {
             ' ' => break,
+            '#' => current = line.len,
             '"', '\'' => current = scanQuoted(line, current + 1, c),
             else => current += 1,
         }
@@ -189,12 +195,34 @@ test "scan works with long strings" {
 }
 
 test "scan can handle inner quotes" {
-    const testStrs: []const []const u8 = &.{ "0'23'5", "'123'5", "0'234'" };
-    for (testStrs) |testStr| {
-        const tokens = try scan(testStr, test_allocator);
+    const test_strs: []const []const u8 = &.{ "0'23'5", "'123'5", "0'234'" };
+    for (test_strs) |test_str| {
+        const tokens = try scan(test_str, test_allocator);
         defer tokens.deinit();
 
-        try expectTokenToBeValueAt(tokens.items[0], testStr, 0);
+        try expectTokenToBeValueAt(tokens.items[0], test_str, 0);
+    }
+}
+
+test "scan stops at comment" {
+    const TestCase = struct {
+        tst: []const u8,
+        exp: usize,
+    };
+
+    const tests = [_]TestCase{
+        TestCase{ .tst = "# comment only", .exp = 0 },
+        TestCase{ .tst = "#", .exp = 0 },
+        TestCase{ .tst = "   #", .exp = 0 },
+        TestCase{ .tst = " # spaced comment", .exp = 0 },
+        TestCase{ .tst = "EXIT # we are done", .exp = 1 },
+        TestCase{ .tst = "GET http://somesite.com # GET request ", .exp = 2 },
+    };
+    for (tests) |case| {
+        const tokens = try scan(case.tst, test_allocator);
+        defer tokens.deinit();
+
+        try expect(tokens.items.len == case.exp);
     }
 }
 
