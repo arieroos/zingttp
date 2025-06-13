@@ -114,7 +114,7 @@ fn run_command(ctx: *Context, cmd: Command) !void {
         try ctx.ui.print("Error while executing command: {s}", .{@errorName(err)});
     } else if (result.response_code) |rc| {
         const phrase = rc.phrase() orelse "Unknown";
-        try ctx.ui.print("Received response: {} - {s} ({} bytes)\n", .{ rc, phrase, result.body.items.len });
+        try ctx.ui.print("Received response: {} - {s} ({} bytes)\n", .{ @intFromEnum(rc), phrase, result.body.items.len });
     }
 }
 
