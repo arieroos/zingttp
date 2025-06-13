@@ -82,7 +82,7 @@ pub fn File(comptime Out: type, comptime line_size: usize) type {
         }
 
         pub fn print(self: *Self, comptime fmt: []const u8, args: anytype) !void {
-            try self.out.print(fmt, args);
+            try self.out.print("Line {}: " ++ fmt, .{self.line_idx} ++ args);
         }
 
         pub fn deinit(self: *Self) void {
@@ -122,9 +122,13 @@ test File {
     defer test_file.deinit();
 
     try test_file.print("hello {s}\n", .{"there"});
-    try expectEqualStrings("hello there\n", buffer[0..12]);
+    try expectEqualStrings("Line 0: hello there\n", buffer[0..20]);
 
     var line_buf: [1024]u8 = undefined;
     const line = try test_file.getNextLine(&line_buf);
     try expectEqualStrings("# Just a basic test to see if we can script commands", line);
+
+    test_stream.reset();
+    try test_file.print("Should print for line 1", .{});
+    try expectEqualStrings("Line 1: Should print for line 1", buffer[0..31]);
 }
