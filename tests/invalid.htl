@@ -1,0 +1,29 @@
+# A test to see if we can pick up programming errors in files
+
+# Does not start with keyword
+get
+
+# Unexpected token after exit
+EXIT 22
+
+# Unexpected token after request
+GET https://jsonplaceholder.typicode.com/posts/ 1
+
+# Missing token
+POST
+
+# A keyword instead of a value
+PUT EXIT
+
+# However, we should still run valid lines, even after invalid ones
+GET https://jsonplaceholder.typicode.com/posts/1
+
+# None of the lines after exit should execute or give errors
+EXIT
+
+# not comments
+# nor valid lines
+GET https://jsonplaceholder.typicode.com/posts/1
+# nor invalid lines
+get some json pleasea
+
