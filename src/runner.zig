@@ -1,13 +1,16 @@
 const std = @import("std");
 
-pub const scanner = @import("scanner.zig");
-pub const parser = @import("parser.zig");
-pub const repl = @import("repl.zig");
-pub const http = @import("http.zig");
+const scanner = @import("scanner.zig");
+const parser = @import("parser.zig");
+const repl = @import("repl.zig");
+const http = @import("http.zig");
+const file = @import("file.zig");
+
+pub const line_size = 1024;
 
 const TestUi = struct {
     nextLine: []const u8 = "",
-    printBuf: [1024]u8 = undefined,
+    printBuf: [line_size]u8 = undefined,
     lastResponse: []u8 = &.{},
 
     fn getNextLine(self: *TestUi, buffer: []u8) ![]u8 {
@@ -21,15 +24,17 @@ const TestUi = struct {
     }
 
     fn print(self: *TestUi, comptime fmt: []const u8, args: anytype) !void {
-        if (std.mem.eql(u8, "Bye!", fmt)) {
-            return;
-        }
         self.lastResponse = std.fmt.bufPrint(&self.printBuf, fmt, args) catch &self.printBuf;
+    }
+
+    fn exit(self: *TestUi) void {
+        _ = self;
     }
 };
 
 pub const UserInterface = union(enum) {
     repl: repl.StdRepl,
+    file: file.StdFile(line_size),
     testing: TestUi,
 
     fn getNextLine(self: *UserInterface, buffer: []u8) ![]u8 {
@@ -41,6 +46,12 @@ pub const UserInterface = union(enum) {
     fn print(self: *UserInterface, comptime fmt: []const u8, args: anytype) !void {
         switch (self.*) {
             inline else => |*impl| return impl.print(fmt, args),
+        }
+    }
+
+    fn exit(self: *UserInterface) void {
+        switch (self.*) {
+            inline else => |*impl| return impl.exit(),
         }
     }
 };
@@ -72,7 +83,13 @@ pub fn run(ui: *UserInterface, allocator: std.mem.Allocator) !void {
 
     var lineBuffer: [1024]u8 = undefined;
     while (true) {
-        const line = try ui.getNextLine(&lineBuffer);
+        const line = ui.getNextLine(&lineBuffer) catch |err| switch (err) {
+            error.EndOfFile => {
+                ui.exit();
+                break;
+            },
+            else => return err,
+        };
         var tokens = try scanner.scan(line, allocator);
         defer tokens.deinit();
 
@@ -80,7 +97,7 @@ pub fn run(ui: *UserInterface, allocator: std.mem.Allocator) !void {
         switch (expression) {
             .nothing => continue,
             .exit => {
-                try ui.print("Bye!\n", .{});
+                ui.exit();
                 break;
             },
             .invalid => |inv| try ui.print("Error: {s}\n", .{inv.message}),
@@ -97,7 +114,7 @@ fn run_command(ctx: *Context, cmd: Command) !void {
         try ctx.ui.print("Error while executing command: {s}", .{@errorName(err)});
     } else if (result.response_code) |rc| {
         const phrase = rc.phrase() orelse "Unknown";
-        try ctx.ui.print("Received reponse: {} - {s} ({} bytes)", .{ rc, phrase, result.body.items.len });
+        try ctx.ui.print("Received response: {} - {s} ({} bytes)\n", .{ rc, phrase, result.body.items.len });
     }
 }
 

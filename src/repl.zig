@@ -40,12 +40,15 @@ pub fn Repl(comptime Reader: type, comptime Writer: type) type {
                 try self.stdout.print("\n", .{});
             }
         }
+
+        pub fn exit(self: *Self) void {
+            self.stdout.print("Bye!\n", .{}) catch unreachable;
+        }
     };
 }
 
 const expect = std.testing.expect;
 const expectEqualStrings = std.testing.expectEqualStrings;
-const testAlloc = std.testing.allocator;
 
 test Repl {
     var buffer: [1024]u8 = undefined;

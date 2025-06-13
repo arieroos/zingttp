@@ -1,0 +1,4 @@
+# Just a basic test to see if we can script commands
+
+GET https://jsonplaceholder.typicode.com/posts/1
+
