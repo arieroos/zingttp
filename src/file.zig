@@ -32,24 +32,33 @@ pub fn File(comptime Out: type, comptime line_size: usize) type {
 
         pub fn getNextLine(self: *Self, buffer: []u8) ![]u8 {
             var idx = self.chunkIdx();
-            if (idx == 0) {
-                try self.readNextChunk();
-            }
-            const lines = self.chunk.items;
+            var lines = self.chunk.items;
+            var line_len: usize = 0;
 
-            while (idx < self.chunk_size and lines[idx].pos == 0) {
-                self.line_idx += 1;
+            while (line_len == 0) {
+                if (idx == 0) {
+                    try self.readNextChunk();
+                    lines = self.chunk.items;
+                }
+
+                while (idx < self.chunk_size) {
+                    line_len = lines[idx].pos;
+                    if (line_len > 0) break;
+
+                    self.line_idx += 1;
+                    idx += 1;
+                }
                 idx = self.chunkIdx();
-            }
 
-            if (idx >= lines.len) {
-                return error.EndOfFile;
+                if (idx >= self.chunk_size) {
+                    return error.EndOfFile;
+                }
             }
 
             const cur_line = lines[idx];
-            std.mem.copyForwards(u8, buffer, cur_line.line_buffer[0..cur_line.pos]);
+            std.mem.copyForwards(u8, buffer, cur_line.line_buffer[0..line_len]);
             self.line_idx += 1;
-            return buffer[0..cur_line.pos];
+            return buffer[0..line_len];
         }
 
         fn chunkIdx(self: *Self) usize {
@@ -60,6 +69,11 @@ pub fn File(comptime Out: type, comptime line_size: usize) type {
             var file = try fs.cwd().openFile(self.file_path, .{ .lock = .shared });
             defer file.close();
             const file_reader = file.reader();
+
+            var skips = self.line_idx;
+            while (skips != 0) : (skips -= 1) {
+                try file_reader.skipUntilDelimiterOrEof('\n');
+            }
 
             var lines_read: usize = 0;
             var eof = false;
@@ -131,4 +145,56 @@ test File {
     test_stream.reset();
     try test_file.print("Should print for line 1", .{});
     try expectEqualStrings("Line 1: Should print for line 1", buffer[0..31]);
+}
+
+test "File reads through entire file" {
+    var buffer: [1024]u8 = undefined;
+    var test_stream = std.io.fixedBufferStream(&buffer);
+    const writer = test_stream.writer();
+
+    var test_file = File(@TypeOf(writer), 1024).init(writer, "tests/invalid.htl", test_alloc);
+    defer test_file.deinit();
+    test_file.max_chunk_size = 4;
+
+    const expected_lines = &[_][]const u8{
+        "# A test to see if we can pick up programming errors in files",
+        "# Does not start with keyword",
+        "get",
+        "# Unexpected token after exit",
+        "EXIT after",
+        "# Unexpected token after request",
+        "GET https://jsonplaceholder.typicode.com/ posts/1",
+        "# Missing token",
+        "POST",
+        "# A keyword instead of a value",
+        "PUT EXIT",
+        "# However, we should still run valid lines, even after invalid ones",
+        "GET https://jsonplaceholder.typicode.com/posts/1",
+        "# None of the lines after exit should execute or give errors",
+        "EXIT",
+        "# not comments",
+        "# nor valid lines",
+        "GET https://jsonplaceholder.typicode.com/posts/1",
+        "# nor invalid lines",
+        "get some json please",
+    };
+
+    var eof = false;
+    var idx: usize = 0;
+    while (!eof) {
+        var line_buf: [1024]u8 = undefined;
+        const line = test_file.getNextLine(&line_buf);
+
+        if (line) |l| {
+            try expectEqualStrings(expected_lines[idx], l);
+            idx += 1;
+        } else |err| {
+            switch (err) {
+                error.EndOfFile => eof = true,
+                else => try expect(false),
+            }
+        }
+    }
+
+    try expect(idx == expected_lines.len);
 }

@@ -25,5 +25,5 @@ EXIT
 # nor valid lines
 GET https://jsonplaceholder.typicode.com/posts/1
 # nor invalid lines
-get some json pleasea
+get some json please
 
