@@ -28,6 +28,8 @@ pub fn main() !void {
     defer results.clearAndFree();
 
     const test_cnt = builtin.test_functions.len - 1;
+
+    var timer = try std.time.Timer.start();
     for (builtin.test_functions) |t| {
         if (std.mem.eql(u8, t.name, "main.test_0")) {
             continue;
@@ -37,6 +39,7 @@ pub fn main() !void {
         const resultCnt = results.get(result) orelse 0;
         try results.put(result, resultCnt + 1);
     }
+    const elapsed = timer.read();
 
     for ([_]Result{ Result.failure, Result.leaked, Result.success }) |result| {
         const count = results.get(result);
@@ -44,13 +47,18 @@ pub fn main() !void {
             println("{s}: {}/{}", .{ @tagName(result), c, test_cnt });
         }
     }
+    println("Total duartion: {}", .{std.fmt.fmtDuration(elapsed)});
 }
 
 fn runTest(testFn: std.builtin.TestFn) Result {
-    print("> {s}: ", .{testFn.name});
+    print("> {s} ", .{testFn.name});
     std.testing.allocator_instance = .{};
-    const result = testFn.func();
 
+    var timer = std.time.Timer.start() catch unreachable;
+    const result = testFn.func();
+    const elapsed = timer.read();
+
+    print("({}): ", .{std.fmt.fmtDuration(elapsed)});
     if (result) |_| {
         println("success", .{});
     } else |err| {
