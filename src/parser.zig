@@ -23,8 +23,29 @@ pub const Expression = union(enum) {
 const InvalidReason = enum {
     ShouldStartWithKeyword,
     UnexpectedToken,
-    ExpectedValue,
+    ExpectedOther,
+    MissingToken,
 };
+
+fn InvalidArgs(comptime reason: InvalidReason) type {
+    return switch (reason) {
+        .UnexpectedToken => struct {
+            pos: usize,
+            lexeme: []const u8,
+        },
+        .ExpectedOther => struct {
+            expected: []const u8,
+            found: []const u8,
+            pos: usize,
+            lexeme: []const u8,
+        },
+        .MissingToken => struct {
+            expected: []const u8,
+            pos: usize,
+        },
+        inline else => struct {},
+    };
+}
 
 pub fn parse(tokenList: TokenList) !Expression {
     const tokens = tokenList.items;
@@ -34,38 +55,51 @@ pub fn parse(tokenList: TokenList) !Expression {
 
     const keyword = switch (tokens[0].token) {
         .keyword => tokens[0].token.keyword,
-        else => return genInvalidExpression(InvalidReason.ShouldStartWithKeyword, tokens[0]),
+        else => return genInvalidExpression(InvalidReason.ShouldStartWithKeyword, .{}),
     };
 
     if (keyword == Keyword.EXIT) {
         if (tokens.len > 1) {
-            return genInvalidExpression(InvalidReason.UnexpectedToken, tokens[1]);
+            return genInvalidExpression(InvalidReason.UnexpectedToken, .{
+                .pos = tokens[1].pos,
+                .lexeme = tokens[1].lexeme,
+            });
         }
         return Expression.exit;
     }
 
     if (tokens.len > 2) {
-        return genInvalidExpression(InvalidReason.UnexpectedToken, tokens[2]);
+        return genInvalidExpression(InvalidReason.UnexpectedToken, .{
+            .pos = tokens[2].pos,
+            .lexeme = tokens[2].lexeme,
+        });
+    }
+    if (tokens.len < 2) {
+        return genInvalidExpression(InvalidReason.MissingToken, .{
+            .expected = "value",
+            .pos = tokens[0].pos + tokens[0].lexeme.len + 1,
+        });
     }
     const cmd = @tagName(keyword);
     const arg = switch (tokens[1].token) {
-        .value => tokens[1].token.value,
-        else => return genInvalidExpression(InvalidReason.ExpectedValue, tokens[1]),
+        .value => |v| v,
+        else => return genInvalidExpression(InvalidReason.ExpectedOther, .{
+            .expected = "value",
+            .found = @tagName(tokens[1].token),
+            .pos = tokens[1].pos,
+            .lexeme = tokens[1].lexeme,
+        }),
     };
 
     return Expression{ .command = .{ .command = cmd, .argument = arg } };
 }
 
-fn genInvalidExpression(comptime reason: InvalidReason, token: TokenInfo) Expression {
+fn genInvalidExpression(comptime reason: InvalidReason, args: InvalidArgs(reason)) Expression {
     const format = comptime switch (reason) {
         .ShouldStartWithKeyword => "Statement does not start with keyword",
         .UnexpectedToken => "Unexpected token at {}: \"{s}\"",
-        .ExpectedValue => "Unexpected {s} instead of value at {}: \"{s}\"",
-    };
-    const args = switch (reason) {
-        .UnexpectedToken => .{ token.pos, token.lexeme },
-        .ExpectedValue => .{ @tagName(token.token), token.pos, token.lexeme },
-        else => .{},
+        .ExpectedOther => "Expected {s} but found {s} at {}: \"{s}\"",
+        .MissingToken => "Missing {s} at {}",
     };
 
     var buffer: [1024]u8 = undefined;
@@ -88,7 +122,7 @@ fn genTestTokenList(tokens: []const Token) !TokenList {
         };
         try tokenList.append(TokenInfo{ .token = token, .lexeme = lexeme, .pos = lengthSoFar });
 
-        lengthSoFar += lexeme.len;
+        lengthSoFar += lexeme.len + 1;
     }
 
     return tokenList;
@@ -129,15 +163,25 @@ test parse {
 
         const expression = try parse(tokens);
         switch (expression) {
-            .invalid => |inv| try expectEqualStrings("Unexpected token at 4: \"gg\"", inv.message),
+            .invalid => |inv| try expectEqualStrings("Unexpected token at 5: \"gg\"", inv.message),
             else => try (expect(false)),
         }
     }
 }
 
-test "Generate Invalid Expresion For Unexpected Token" {
-    const token = TokenInfo{ .token = Token{ .keyword = Keyword.GET }, .lexeme = "GET", .pos = 77 };
-    const msg = genInvalidExpression(InvalidReason.UnexpectedToken, token);
+test "parse breaks on command without arg" {
+    var tokens = try genTestTokenList(&[_]Token{Token{ .keyword = Keyword.PUT }});
+    defer tokens.deinit();
+
+    const expression = try parse(tokens);
+    switch (expression) {
+        .invalid => |inv| try expectEqualStrings("Missing value at 4", inv.message),
+        else => try (expect(false)),
+    }
+}
+
+test "generateInvalidExpression Generate Invalid Expresion For Unexpected Token" {
+    const msg = genInvalidExpression(InvalidReason.UnexpectedToken, .{ .pos = 77, .lexeme = "GET" });
     switch (msg) {
         .invalid => |inv| try expectEqualStrings(inv.message, "Unexpected token at 77: \"GET\""),
         else => try expect(false),
