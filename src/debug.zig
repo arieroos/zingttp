@@ -39,7 +39,7 @@ pub fn print(comptime fmt: []const u8, args: anytype) void {
     if (!active)
         return;
 
-    stderr.print(" -- {s}" ++ fmt, .{getElapsedStr()} ++ args) catch {};
+    stderr.print("{s}-- " ++ fmt, .{getElapsedStr()} ++ args) catch {};
 }
 
 pub fn print0(comptime str: []const u8) void {
