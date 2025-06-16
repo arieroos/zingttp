@@ -132,14 +132,20 @@ pub fn run(ui: *UserInterface, allocator: std.mem.Allocator) !void {
 }
 
 fn run_command(ctx: *Context, cmd: Command) !void {
+    var timer = try std.time.Timer.start();
     const result = ctx.client.do(cmd.command, cmd.argument);
+
+    const elapsed_ms = timer.read() / std.time.ns_per_ms;
 
     ctx.last_response = result;
     if (result.fetch_error) |err| {
         try ctx.ui.print("Error while executing command: {s}", .{@errorName(err)});
     } else if (result.response_code) |rc| {
         const phrase = rc.phrase() orelse "Unknown";
-        try ctx.ui.print("Received response: {} - {s} ({} bytes)\n", .{ @intFromEnum(rc), phrase, result.body.items.len });
+        try ctx.ui.print(
+            "Received response {} ({s}): {} bytes in {} millisconds\n",
+            .{ @intFromEnum(rc), phrase, result.body.items.len, elapsed_ms },
+        );
     }
 }
 
