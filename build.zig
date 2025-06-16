@@ -1,5 +1,16 @@
 const std = @import("std");
 
+const Manifest = struct {
+    name: enum(u8) { zinghtl },
+    version: []const u8,
+    fingerprint: u64,
+    minimum_zig_version: []const u8,
+    dependencies: struct {},
+    paths: []const []const u8,
+};
+
+const manifest: Manifest = @import("build.zig.zon");
+
 // Although this function looks imperative, note that its job is to
 // declaratively construct a build graph that will be executed by an external
 // runner.
@@ -32,6 +43,10 @@ pub fn build(b: *std.Build) void {
         .name = "zttp",
         .root_module = exe_mod,
     });
+
+    const manifest_opts = b.addOptions();
+    manifest_opts.addOption(Manifest, "manifest", manifest);
+    exe.root_module.addOptions("build", manifest_opts);
 
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
