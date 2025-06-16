@@ -40,6 +40,10 @@ pub fn iLstHas(haystack: []const String, needle: String) bool {
     return false;
 }
 
+pub fn starts_with(haystack: String, needle: String) bool {
+    return std.mem.startsWith(u8, haystack, needle);
+}
+
 const expect = std.testing.expect;
 
 test eql {

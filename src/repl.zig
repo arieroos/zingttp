@@ -3,9 +3,12 @@ const std = @import("std");
 const stdin = std.io.getStdIn().reader();
 const stdout = std.io.getStdOut().writer();
 
+const debug = @import("debug.zig");
+
 pub const StdRepl = Repl(@TypeOf(stdin), @TypeOf(stdout));
 
 pub fn InitStdRepl() !StdRepl {
+    debug.println0("Starting up REPL");
     return StdRepl.init(stdin, stdout);
 }
 

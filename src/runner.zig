@@ -1,5 +1,7 @@
 const std = @import("std");
 
+const debug = @import("debug.zig");
+
 const scanner = @import("scanner.zig");
 const parser = @import("parser.zig");
 const repl = @import("repl.zig");
@@ -69,12 +71,14 @@ pub const UserInterface = union(enum) {
     }
 
     fn print(self: *UserInterface, comptime fmt: []const u8, args: anytype) !void {
+        debug.println0("Sending user feedback");
         switch (self.*) {
             inline else => |*impl| return impl.print(fmt, args),
         }
     }
 
     fn exit(self: *UserInterface) void {
+        debug.println0("Exiting...");
         switch (self.*) {
             inline else => |*impl| return impl.exit(),
         }
@@ -139,7 +143,7 @@ fn run_command(ctx: *Context, cmd: Command) !void {
 
     ctx.last_response = result;
     if (result.fetch_error) |err| {
-        try ctx.ui.print("Error while executing command: {s}", .{@errorName(err)});
+        try ctx.ui.print("Error while executing command: {s}\n", .{@errorName(err)});
     } else if (result.response_code) |rc| {
         const phrase = rc.phrase() orelse "Unknown";
         try ctx.ui.print(
@@ -152,6 +156,7 @@ fn run_command(ctx: *Context, cmd: Command) !void {
 const test_alloc = std.testing.allocator;
 const expect = std.testing.expect;
 const expectEqualStrings = std.testing.expectEqualStrings;
+const expectStringStartsWith = std.testing.expectStringStartsWith;
 
 fn makeTestUi(inputs: []const []const u8) UserInterface {
     return UserInterface{ .testing = TestUi.init(inputs, test_alloc) };
@@ -216,13 +221,13 @@ fn runFileTest(file_name: []const u8, expected_lines: []const []const u8) !void 
     const outputs = testUi.testing.getOutputMsgs();
     try expect(outputs.len == expected_lines.len);
     for (outputs, expected_lines) |output, expected| {
-        try expectEqualStrings(expected, output);
+        try expectStringStartsWith(output, expected);
     }
 }
 
 test "Run basic file" {
     const expecteds = &[_][]const u8{
-        "Received response: 200 - OK (292 bytes)\n",
+        "Received response 200 (OK): 292 bytes in",
     };
     try runFileTest("tests/basic.htl", expecteds);
 }
@@ -234,7 +239,7 @@ test "Run invalid file" {
         "Error: Unexpected token at 42: \"posts/1\"\n",
         "Error: Missing value at 5\n",
         "Error: Expected value but found keyword at 4: \"EXIT\"\n",
-        "Received response: 200 - OK (292 bytes)\n",
+        "Received response 200 (OK): 292 bytes in",
     };
     try runFileTest("tests/invalid.htl", expecteds);
 }

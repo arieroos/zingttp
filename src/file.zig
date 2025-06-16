@@ -1,6 +1,8 @@
 const std = @import("std");
 const fs = std.fs;
 
+const debug = @import("debug.zig");
+
 fn ChunkLine(comptime line_size: usize) type {
     return struct {
         line_buffer: [line_size]u8,
@@ -22,6 +24,8 @@ pub fn File(comptime Out: type, comptime line_size: usize) type {
         chunk_size: usize = 0,
 
         pub fn init(out: Out, file_path: []const u8, allocator: std.mem.Allocator) Self {
+            debug.println("Running script at {s}", .{file_path});
+
             return Self{
                 .out = out,
                 .file_path = file_path,
@@ -91,6 +95,11 @@ pub fn File(comptime Out: type, comptime line_size: usize) type {
                 };
                 chunk_line.pos = buffer.getWritten().len;
             }
+
+            if (debug.isActive()) debug.println(
+                "Read lines {} to {}",
+                .{ self.line_idx, self.line_idx + lines_read },
+            );
 
             self.chunk_size = lines_read;
         }
