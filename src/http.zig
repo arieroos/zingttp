@@ -152,6 +152,8 @@ pub const Client = struct {
     allocator: std.mem.Allocator,
 
     pub fn do(self: *Client, method_str: String, url: String, options: Options) Request {
+        debug.println("Initiating {s} request to {s}", .{ method_str, url });
+
         var request = Request{
             .method = method_str,
             .url = url,
@@ -179,6 +181,7 @@ pub const Client = struct {
             ErrReason.uri,
         );
 
+        debug.println("Opening connection to {s}", .{uri.host.?.percent_encoded});
         var req = StdClient.open(&self.client, method, uri, .{
             .server_header_buffer = server_header_buf,
             .redirect_behavior = StdClient.Request.RedirectBehavior.unhandled,
@@ -187,6 +190,8 @@ pub const Client = struct {
 
         req.send() catch |err| return genErrResp(&request, err, timer.read(), ErrReason.send);
         req.finish() catch |err| return genErrResp(&request, err, timer.read(), ErrReason.finish);
+
+        debug.println("Waiting for reply from {s}", .{uri.host.?.percent_encoded});
         req.wait() catch |err| return genErrResp(&request, err, timer.read(), ErrReason.wait);
 
         const header_map = scanHeaders(
@@ -213,6 +218,10 @@ pub const Client = struct {
         } };
         request.time_spent = timer.read();
 
+        if (debug.isActive()) {
+            const time_str = std.fmt.fmtDuration(request.time_spent);
+            debug.println("Finsihed {s} request to {s} in {s}", .{ method_str, url, time_str });
+        }
         return request;
     }
 
