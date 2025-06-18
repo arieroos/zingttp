@@ -3,13 +3,31 @@ const builtin = @import("builtin");
 
 const stdOut = std.io.getStdOut().writer();
 
+const AnsiEsc = enum { reset, red, green, yellow };
+
+fn esc(comptime ansi: AnsiEsc) []const u8 {
+    return "\x1b[" ++ comptime switch (ansi) {
+        .reset => "0",
+        .red => "31",
+        .green => "32",
+        .yellow => "33",
+    } ++ "m";
+}
+
 fn print(comptime format: []const u8, args: anytype) void {
     stdOut.print(format, args) catch unreachable;
 }
 
+fn print_fmt(comptime ansi: AnsiEsc, comptime fmt: []const u8, args: anytype) void {
+    print(esc(ansi) ++ fmt ++ esc(AnsiEsc.reset), args);
+}
+
 fn println(comptime format: []const u8, args: anytype) void {
-    print(format, args);
-    stdOut.print("\n", .{}) catch unreachable;
+    print(format ++ "\n", args);
+}
+
+fn println_fmt(comptime ansi: AnsiEsc, comptime fmt: []const u8, args: anytype) void {
+    println(esc(ansi) ++ fmt ++ esc(AnsiEsc.reset), args);
 }
 
 const Result = enum {
@@ -41,10 +59,14 @@ pub fn main() !void {
     }
     const elapsed = timer.read();
 
-    for ([_]Result{ Result.failure, Result.leaked, Result.success }) |result| {
+    inline for ([_]Result{ Result.failure, Result.leaked, Result.success }) |result| {
         const count = results.get(result);
         if (count) |c| {
-            println("{s}: {}/{}", .{ @tagName(result), c, test_cnt });
+            const ansi = switch (result) {
+                .failure, .leaked => AnsiEsc.red,
+                .success => AnsiEsc.green,
+            };
+            println_fmt(ansi, "{s}: {}/{}", .{ @tagName(result), c, test_cnt });
         }
     }
     println("Total duartion: {}", .{std.fmt.fmtDuration(elapsed)});
@@ -60,9 +82,9 @@ fn runTest(testFn: std.builtin.TestFn) Result {
 
     print("({}): ", .{std.fmt.fmtDuration(elapsed)});
     if (result) |_| {
-        println("success", .{});
+        println_fmt(AnsiEsc.green, "success", .{});
     } else |err| {
-        println("failed: {}", .{err});
+        println_fmt(AnsiEsc.red, "failed: {}", .{err});
         if (@errorReturnTrace()) |trace| {
             std.debug.dumpStackTrace(trace.*);
         }
