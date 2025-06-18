@@ -40,14 +40,24 @@ pub fn iLstHas(haystack: []const String, needle: String) bool {
     return false;
 }
 
-pub fn starts_with(haystack: String, needle: String) bool {
+pub fn startsWith(haystack: String, needle: String) bool {
     return std.mem.startsWith(u8, haystack, needle);
 }
 
+pub fn toOwned(val: String, allocator: std.mem.Allocator) !String {
+    const allocated = try allocator.alloc(u8, val.len);
+    mem.copyForwards(u8, allocated, val);
+    return allocated;
+}
+
 const expect = std.testing.expect;
+const expectError = std.testing.expectError;
+const expectEqualStrings = std.testing.expectEqualStrings;
+const test_alloc = std.testing.allocator;
 
 test eql {
     try expect(eql("", ""));
+    try expect(!eql("", "test"));
 
     try expect(eql("test", "test"));
     try expect(!eql("test", "test1"));
@@ -58,6 +68,7 @@ test eql {
 
 test iEql {
     try expect(iEql("", ""));
+    try expect(!iEql("", "test"));
 
     try expect(iEql("test", "test"));
     try expect(!iEql("test", "test1"));
@@ -88,4 +99,34 @@ test iLstHas {
 
     try expect(iLstHas(lst, "Test"));
     try expect(!iLstHas(lst, "Test1"));
+}
+
+test startsWith {
+    try expect(startsWith("", ""));
+    try expect(!startsWith("", "test"));
+
+    try expect(startsWith("test something", "test"));
+    try expect(!startsWith("test something", "test1"));
+
+    try expect(!startsWith("test something", "Test"));
+    try expect(!startsWith("test something", "Test1"));
+}
+
+test toOwned {
+    const test_str = "Some test";
+
+    for (&[_]bool{ true, false }) |owned| {
+        var result_str: []const u8 = "";
+        {
+            const copied = try std.fmt.allocPrint(test_alloc, "{s}", .{test_str});
+            defer test_alloc.free(copied);
+
+            result_str = if (owned) try toOwned(copied, test_alloc) else copied;
+        }
+
+        if (owned) {
+            try expectEqualStrings(test_str, result_str);
+            test_alloc.free(result_str);
+        } else try expect(!std.testing.allocator_instance.detectLeaks());
+    }
 }
