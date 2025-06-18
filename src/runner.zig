@@ -248,7 +248,7 @@ test "Run basic file" {
     const expecteds = &[_][]const u8{
         "Received response 200 (OK): 292 bytes in",
     };
-    try runFileTest("tests/basic.htl", expecteds);
+    try runFileTest("tests/basic.http", expecteds);
 }
 
 test "Run invalid file" {
@@ -260,5 +260,5 @@ test "Run invalid file" {
         "Error: Expected value but found keyword at 4: \"EXIT\"\n",
         "Received response 200 (OK): 292 bytes in",
     };
-    try runFileTest("tests/invalid.htl", expecteds);
+    try runFileTest("tests/invalid.http", expecteds);
 }

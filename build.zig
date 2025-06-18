@@ -1,7 +1,7 @@
 const std = @import("std");
 
 const Manifest = struct {
-    name: enum(u8) { zinghtl },
+    name: enum(u8) { zingttp },
     version: []const u8,
     fingerprint: u64,
     minimum_zig_version: []const u8,

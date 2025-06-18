@@ -20,7 +20,7 @@ pub fn Repl(comptime Reader: type, comptime Writer: type) type {
         stdout: Writer,
 
         pub fn init(in: Reader, out: Writer) !Self {
-            try out.print("ZingTTP: A Language for Testing HTTP Services\n", .{});
+            try out.print("ZingTTP: An HTTP Scripting Language\n", .{});
 
             return Self{ .stdin = in, .stdout = out };
         }

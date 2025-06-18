@@ -1,1 +1,1 @@
-ZingTTP: A Language for Testing HTTP Services
+ZingTTP: A language for scripting HTTP Requests.
