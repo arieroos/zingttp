@@ -44,6 +44,10 @@ pub fn startsWith(haystack: String, needle: String) bool {
     return mem.startsWith(u8, haystack, needle);
 }
 
+pub fn endsWith(haystack: String, needle: String) bool {
+    return mem.endsWith(u8, haystack, needle);
+}
+
 pub fn toOwned(val: String, allocator: std.mem.Allocator) !String {
     const allocated = try allocator.alloc(u8, val.len);
     mem.copyForwards(u8, allocated, val);
@@ -114,6 +118,17 @@ test startsWith {
 
     try expect(!startsWith("test something", "Test"));
     try expect(!startsWith("test something", "Test1"));
+}
+
+test endsWith {
+    try expect(endsWith("", ""));
+    try expect(!endsWith("", "test"));
+
+    try expect(endsWith("a test", "test"));
+    try expect(!endsWith("a test", "test1"));
+
+    try expect(!endsWith("a test", "Test"));
+    try expect(!endsWith("a test", "Test1"));
 }
 
 test toOwned {

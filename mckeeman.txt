@@ -1,18 +1,31 @@
 # https://www.crockford.com/mckeeman.html
+
 line
-    expression '000A'
     comment '000A'
+    expression '000A'
     expression comment '000A'
 
 comment
-    '#' optional
+    '#' anything
+
+anything
+    '0020' . '10FFF'
+    anything anything
 
 expression
     ""
     "EXIT"
-    command '0020' argument
+    request
+    print
 
-command
+request
+    method space argument
+
+print
+    "PRINT"
+    "PRINT" space argument
+
+method
     "GET"
     "POST"
     "PUT"
@@ -24,24 +37,57 @@ command
     "PATCH"
 
 argument
+    variable
+    literal
     characters
-    quote optional quote
+    argument argument
 
-quote
-    '"'
-    '''
+variable
+    "{{" space identifiers space "}}"
 
-optional
-    ""
-    '0021'
-    '#'
-    characters
-    optional optional
+space
+    '0020'
+    space space
+
+identifiers
+    identifier
+    identifier '.' identifiers
+
+identifier
+    '_'
+    alphanumeric
+    indentifier identifier
+
+alphanumeric
+    'a' . 'z'
+    'A' . 'Z'
+    '0' . '9'
+    alphanumeric alphanumeric
+
+literal
+    ''' squoutables '''
+    '"' dquoutables '''
+
+squoutables
+    squoutable
+    squoutable squoutables
+
+squoutable
+    '0020' . '10FFF' - '''
+
+dquoutables
+    dquoutable
+    dquoutable dquoutables
+
+dquoutable
+    '0020' . '10FFF' - '"'
 
 characters
+    '{'
+    '{' character characters
     character
     character characters
 
 character
-    '0021' . '10FFF' - '#'
+    '0021' . '10FFF' - '#' - '{' - ''' - '"'
 

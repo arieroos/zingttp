@@ -118,7 +118,7 @@ fn genTestTokenList(tokens: []const Token) !TokenList {
     for (tokens) |token| {
         const lexeme = switch (token) {
             .keyword => @tagName(token.keyword),
-            .value => |v| v,
+            inline else => |v| v,
         };
         try tokenList.append(TokenInfo{ .token = token, .lexeme = lexeme, .pos = lengthSoFar });
 
