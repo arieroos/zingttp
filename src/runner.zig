@@ -149,9 +149,10 @@ fn run_command(ctx: *Context, cmd: Command) !void {
         },
         .success => |r| {
             const phrase = r.code.phrase() orelse "Unknown";
+            const spent_ms = result.time_spent / std.time.ns_per_ms;
             try ctx.ui.print(
                 "Received response {} ({s}): {} bytes in {} millisconds\n",
-                .{ @intFromEnum(r.code), phrase, r.body.items.len, result.time_spent },
+                .{ @intFromEnum(r.code), phrase, r.body.items.len, spent_ms },
             );
         },
     }

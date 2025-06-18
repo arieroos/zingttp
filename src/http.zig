@@ -211,6 +211,7 @@ pub const Client = struct {
             .body = response_body,
             .code = req.response.status,
         } };
+        request.time_spent = timer.read();
 
         return request;
     }
