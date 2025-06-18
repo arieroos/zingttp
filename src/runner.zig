@@ -88,18 +88,19 @@ pub const UserInterface = union(enum) {
 const Context = struct {
     client: http.Client,
     ui: *UserInterface,
-    last_response: ?http.Response = null,
+    last_req: ?http.Request = null,
+    options: http.Options = .{},
+    // TODO: A way to specify options
 
-    fn update_last_response(self: *Context, new: http.Response) void {
-        var old = self.last_response;
-        self.last_response = new;
-        if (old) |*o| {
-            o.body.clearAndFree();
-        }
+    fn update_last_response(self: *Context, new: http.Request) void {
+        var old = self.last_req;
+        self.last_req = new;
+        if (old) |*o|
+            o.deinit();
     }
 
     fn deinit(self: *Context) void {
-        if (self.last_response) |*r| r.body.clearAndFree();
+        if (self.last_req) |*r| r.deinit();
         self.client.deinit();
     }
 };
@@ -136,20 +137,23 @@ pub fn run(ui: *UserInterface, allocator: std.mem.Allocator) !void {
 }
 
 fn run_command(ctx: *Context, cmd: Command) !void {
-    var timer = try std.time.Timer.start();
-    const result = ctx.client.do(cmd.command, cmd.argument);
+    const result = ctx.client.do(cmd.command, cmd.argument, ctx.options);
 
-    const elapsed_ms = timer.read() / std.time.ns_per_ms;
-
-    ctx.last_response = result;
-    if (result.fetch_error) |err| {
-        try ctx.ui.print("Error while executing command: {s}\n", .{@errorName(err)});
-    } else if (result.response_code) |rc| {
-        const phrase = rc.phrase() orelse "Unknown";
-        try ctx.ui.print(
-            "Received response {} ({s}): {} bytes in {} millisconds\n",
-            .{ @intFromEnum(rc), phrase, result.body.items.len, elapsed_ms },
-        );
+    ctx.last_req = result;
+    switch (result.response) {
+        .failure => |err| {
+            try ctx.ui.print(
+                "Error while executing {s} command: {s}: {s}\n",
+                .{ result.method, err.reason, @errorName(err.base_err) },
+            );
+        },
+        .success => |r| {
+            const phrase = r.code.phrase() orelse "Unknown";
+            try ctx.ui.print(
+                "Received response {} ({s}): {} bytes in {} millisconds\n",
+                .{ @intFromEnum(r.code), phrase, r.body.items.len, result.time_spent },
+            );
+        },
     }
 }
 
@@ -175,20 +179,34 @@ test run {
     try run(&testUi, test_alloc);
 }
 
-test "Context update response without leaking memory" {
-    var response1 = std.ArrayList(u8).init(test_alloc);
-    try response1.appendSlice("Something nice and long, we want to to check for memory leaks.");
-    var response2 = std.ArrayList(u8).init(test_alloc);
-    try response2.appendSlice("Hi there!");
+fn makeTestResponse(body: []const u8) !http.Request {
+    var body_arr = std.ArrayList(u8).init(test_alloc);
+    try body_arr.appendSlice(body);
 
-    var ctx = makeTestCtx();
-    defer ctx.deinit();
-
-    ctx.last_response = .{ .body = response1 };
-    ctx.update_last_response(.{ .body = response2 });
+    return http.Request{
+        .headers = http.HeaderMap.init(test_alloc),
+        .method = "",
+        .url = "",
+        .response = .{ .success = .{
+            .body = body_arr,
+            .headers = http.HeaderMap.init(test_alloc),
+            .code = std.http.Status.ok,
+        } },
+    };
 }
 
-fn makeTestuiFromFile(file_path: []const u8, allocator: std.mem.Allocator) !UserInterface {
+test "Context update response without leaking memory" {
+    var ctx = makeTestCtx();
+    errdefer ctx.deinit();
+
+    ctx.last_req = try makeTestResponse("Something nice and long, we want to to check for memory leaks.");
+    ctx.update_last_response(try makeTestResponse("Hi there!"));
+
+    ctx.deinit();
+    try expect(!std.testing.allocator_instance.detectLeaks());
+}
+
+fn makeTestUiFromFile(file_path: []const u8, allocator: std.mem.Allocator) !UserInterface {
     var test_file = try std.fs.cwd().openFile(file_path, .{ .lock = .shared });
     defer test_file.close();
     const file_reader = test_file.reader();
@@ -213,7 +231,7 @@ fn runFileTest(file_name: []const u8, expected_lines: []const []const u8) !void 
     var arena = std.heap.ArenaAllocator.init(test_alloc);
     defer arena.deinit();
 
-    var testUi = try makeTestuiFromFile(file_name, arena.allocator());
+    var testUi = try makeTestUiFromFile(file_name, arena.allocator());
     defer testUi.testing.deinit();
 
     try run(&testUi, test_alloc);

@@ -41,13 +41,17 @@ pub fn iLstHas(haystack: []const String, needle: String) bool {
 }
 
 pub fn startsWith(haystack: String, needle: String) bool {
-    return std.mem.startsWith(u8, haystack, needle);
+    return mem.startsWith(u8, haystack, needle);
 }
 
 pub fn toOwned(val: String, allocator: std.mem.Allocator) !String {
     const allocated = try allocator.alloc(u8, val.len);
     mem.copyForwards(u8, allocated, val);
     return allocated;
+}
+
+pub fn trimWhitespace(val: String) String {
+    return mem.trim(u8, val, &ascii.whitespace);
 }
 
 const expect = std.testing.expect;
@@ -129,4 +133,13 @@ test toOwned {
             test_alloc.free(result_str);
         } else try expect(!std.testing.allocator_instance.detectLeaks());
     }
+}
+
+test trimWhitespace {
+    try expectEqualStrings("a", trimWhitespace("a"));
+    try expectEqualStrings("a", trimWhitespace(" a "));
+    try expectEqualStrings("a", trimWhitespace("\na\r"));
+    try expectEqualStrings("a", trimWhitespace("a  \t \n"));
+    try expectEqualStrings("", trimWhitespace("\n\n  \t"));
+    try expectEqualStrings("a", trimWhitespace("\ta"));
 }

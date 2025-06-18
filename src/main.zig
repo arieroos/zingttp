@@ -87,7 +87,7 @@ fn parseArgs(arg_list: std.ArrayList(String)) Args {
             continue;
         }
 
-        if (!strings.starts_with(arg, "-")) {
+        if (!strings.startsWith(arg, "-")) {
             arg_struct.run_type = .{ .file = arg };
         }
     }
