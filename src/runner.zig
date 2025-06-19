@@ -92,7 +92,7 @@ const Context = struct {
     options: http.Options = .{},
     // TODO: A way to specify options
 
-    fn update_last_response(self: *Context, new: http.Request) void {
+    fn updateLastResponse(self: *Context, new: http.Request) void {
         var old = self.last_req;
         self.last_req = new;
         if (old) |*o|
@@ -105,7 +105,7 @@ const Context = struct {
     }
 };
 
-const Request = parser.Request;
+const RequestExpr = parser.Request;
 
 pub fn run(ui: *UserInterface, allocator: std.mem.Allocator) !void {
     var ctx = Context{ .client = http.client(allocator), .ui = ui };
@@ -133,13 +133,13 @@ pub fn run(ui: *UserInterface, allocator: std.mem.Allocator) !void {
                 break;
             },
             .invalid => |inv| try ui.print("Error: {s}\n", .{inv}),
-            .request => |req| try do_request(&ctx, req),
+            .request => |req| try doRequest(&ctx, req),
             .print => try ui.print("PRINT\n", .{}),
         }
     }
 }
 
-fn do_request(ctx: *Context, req: Request) !void {
+fn doRequest(ctx: *Context, req: RequestExpr) !void {
     const result = ctx.client.do(req.method, req.arguments.items[0].value, ctx.options);
 
     ctx.last_req = result;
@@ -179,8 +179,25 @@ fn makeTestCtx() Context {
 }
 
 test run {
-    var testUi = makeTestUi(&[_][]const u8{});
-    try run(&testUi, test_alloc);
+    var test_ui = makeTestUi(&[_][]const u8{});
+    try run(&test_ui, test_alloc);
+}
+
+test "run can make a request and print the requested url" {
+    const cmds = [_][]const u8{
+        "GET https://jsonplaceholder.typicode.com/posts/1",
+        "PRINT Done",
+        "PRINT \"Url requested: \"{{ last_req.url }}",
+    };
+    var test_ui = makeTestUi(&cmds);
+    defer test_ui.testing.deinit();
+
+    try run(&test_ui, test_alloc);
+
+    const outputs = test_ui.testing.getOutputMsgs();
+    try expect(outputs.len == 3);
+    try expectStringStartsWith(outputs[1], "Done");
+    try expectStringStartsWith(outputs[1], "Url Requested https://jsonplaceholder.typicode.com/posts/1");
 }
 
 fn makeTestResponse(body: []const u8) !http.Request {
@@ -199,12 +216,12 @@ fn makeTestResponse(body: []const u8) !http.Request {
     };
 }
 
-test "Context update response without leaking memory" {
+test "Context.updateLastResponse does not leak memory" {
     var ctx = makeTestCtx();
     errdefer ctx.deinit();
 
     ctx.last_req = try makeTestResponse("Something nice and long, we want to to check for memory leaks.");
-    ctx.update_last_response(try makeTestResponse("Hi there!"));
+    ctx.updateLastResponse(try makeTestResponse("Hi there!"));
 
     ctx.deinit();
     try expect(!std.testing.allocator_instance.detectLeaks());
@@ -235,12 +252,12 @@ fn runFileTest(file_name: []const u8, expected_lines: []const []const u8) !void 
     var arena = std.heap.ArenaAllocator.init(test_alloc);
     defer arena.deinit();
 
-    var testUi = try makeTestUiFromFile(file_name, arena.allocator());
-    defer testUi.testing.deinit();
+    var test_ui = try makeTestUiFromFile(file_name, arena.allocator());
+    defer test_ui.testing.deinit();
 
-    try run(&testUi, test_alloc);
+    try run(&test_ui, test_alloc);
 
-    const outputs = testUi.testing.getOutputMsgs();
+    const outputs = test_ui.testing.getOutputMsgs();
     try expect(outputs.len == expected_lines.len);
     for (outputs, expected_lines) |output, expected| {
         try expectStringStartsWith(output, expected);
