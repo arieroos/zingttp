@@ -107,7 +107,7 @@ pub fn parse(tokenList: TokenList, allocator: std.mem.Allocator) !Expression {
     }
 
     const args = if (tokens.len > 2)
-        try getArgs(tokens[2..], allocator)
+        try parseArgs(tokens[2..], allocator)
     else
         GetArgResult{ .args = ArgList.init(allocator) };
 
@@ -153,7 +153,7 @@ const GetArgResult = union(enum) {
     args: ArgList,
 };
 
-fn getArgs(tokens: []TokenInfo, allocator: std.mem.Allocator) !GetArgResult {
+fn parseArgs(tokens: []TokenInfo, allocator: std.mem.Allocator) !GetArgResult {
     var args = ArgList.init(allocator);
     errdefer args.clearAndFree();
 
@@ -222,6 +222,15 @@ fn genTestTokenList(tokens: []const Token) !TokenList {
     return tokenList;
 }
 
+fn expectArgumentAt(args: ArgList, idx: usize, val: String) !void {
+    try expect(args.items.len > idx);
+    const arg = args.items[idx];
+
+    switch (arg) {
+        .value, .variable => |v| try expectEqualStrings(val, v),
+    }
+}
+
 test parse {
     {
         var noTokens = try TokenList.initCapacity(test_allocator, 0);
@@ -253,7 +262,7 @@ test parse {
         defer expression.deinit(test_allocator);
 
         try expectEqualStrings("POST", expression.request.method);
-        try expectEqualStrings("http://some_url.com", expression.request.arguments.items[0].value);
+        try expectArgumentAt(expression.request.arguments, 0, "http://some_url.com");
     }
     {
         var tokens = try genTestTokenList(&[_]Token{
@@ -271,6 +280,21 @@ test parse {
             else => try (expect(false)),
         }
     }
+    {
+        var tokens = try genTestTokenList(&[_]Token{
+            Token{ .keyword = Keyword.PRINT },
+            Token{ .whitespace = 1 },
+            Token{ .value = "gg" },
+            Token{ .variable = "some.variable" },
+        });
+        defer tokens.deinit();
+
+        var expression = try parse(tokens, test_allocator);
+        defer expression.deinit(test_allocator);
+
+        try expectArgumentAt(expression.print, 0, "gg");
+        try expectArgumentAt(expression.print, 1, "some.variable");
+    }
 }
 
 test "parse breaks on command without arg" {
@@ -286,7 +310,57 @@ test "parse breaks on command without arg" {
     }
 }
 
-test "generateInvalidExpression Generate Invalid Expresion For Unexpected Token" {
+test "parseArgs parses args" {
+    var tokens = try genTestTokenList(&[_]Token{
+        Token{ .value = "PUT" },
+        Token{ .value = "some value" },
+        Token{ .variable = "a.variable" },
+        Token{ .variable = "PUT" },
+    });
+    defer tokens.deinit();
+
+    var args = try parseArgs(tokens.items, test_allocator);
+    switch (args) {
+        .invalid => |i| {
+            defer test_allocator.free(i.invalid);
+            std.log.err("Unexpected invalid arg: {s}", .{i.invalid});
+            try expect(false);
+        },
+        .args => |*a| {
+            defer a.clearAndFree();
+            try expect(a.items.len == tokens.items.len);
+        },
+    }
+}
+
+test "parseArgs breaks on non-args" {
+    var tokens = try genTestTokenList(&[_]Token{
+        Token{ .value = "PUT" },
+        Token{ .value = "some value" },
+        Token{ .variable = "a.variable" },
+        Token{ .whitespace = 2 },
+    });
+    defer tokens.deinit();
+
+    var args = try parseArgs(tokens.items, test_allocator);
+    switch (args) {
+        .invalid => |i| {
+            defer test_allocator.free(i.invalid);
+            try expect(true);
+        },
+        .args => |*a| {
+            defer a.clearAndFree();
+
+            const v = switch (a.items[3]) {
+                .value, .variable => |v| v,
+            };
+            std.log.err("Unexpected arg: {s}", .{v});
+            try expect(false);
+        },
+    }
+}
+
+test "genInvalidExpression Generate Invalid Expresion For Unexpected Token" {
     const msg = genInvalidExpression(
         InvalidReason.UnexpectedToken,
         .{ .pos = 77, .lexeme = "GET" },
