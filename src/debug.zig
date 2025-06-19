@@ -8,6 +8,7 @@ var timer: ?std.time.Timer = null;
 pub fn activate() void {
     active = true;
     timer = std.time.Timer.start() catch null;
+    println0("Debug mode active");
 }
 
 pub fn isActive() bool {

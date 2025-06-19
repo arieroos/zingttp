@@ -101,6 +101,7 @@ const expectEqualStrings = std.testing.expectEqualStrings;
 const test_alloc = std.testing.allocator;
 
 test {
+    debug.activate();
     std.testing.refAllDecls(@This());
 }
 

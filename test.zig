@@ -49,14 +49,14 @@ pub fn main() !void {
     _ = args.skip();
     var expect_filter = false;
     var filter: []const u8 = "";
+    var do_debug = false;
     while (args.next()) |arg| {
         if (expect_filter) {
             filter = arg;
-            break;
+            expect_filter = false;
         }
-        if (std.mem.eql(u8, arg, "--filter") or std.mem.eql(u8, arg, "-f")) {
-            expect_filter = true;
-        }
+        expect_filter = std.mem.eql(u8, arg, "--filter") or std.mem.eql(u8, arg, "-f");
+        do_debug = std.mem.eql(u8, arg, "--debug") or std.mem.eql(u8, arg, "-d");
     }
 
     var results = std.AutoHashMap(Result, usize).init(gpa.allocator());
@@ -67,6 +67,7 @@ pub fn main() !void {
     var timer = try std.time.Timer.start();
     for (builtin.test_functions) |t| {
         if (std.mem.eql(u8, t.name, "main.test_0")) {
+            if (do_debug) t.func() catch {};
             continue;
         }
 
