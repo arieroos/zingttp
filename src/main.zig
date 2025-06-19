@@ -31,7 +31,6 @@ pub fn main() !void {
 
     if (args.debug_mode) {
         debug.activate();
-        debug.println0("Debug mode active");
     }
 
     var ui: ?runner.UserInterface = null;

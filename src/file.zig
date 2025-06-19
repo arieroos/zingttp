@@ -179,6 +179,10 @@ test "File reads through entire file" {
         "PUT EXIT",
         "# However, we should still run valid lines, even after invalid ones",
         "GET https://jsonplaceholder.typicode.com/posts/1",
+        "# Print statements should also have only one argument",
+        "PRINT two args {{ last_request }}",
+        "# And we should still print valid statements after discarding invalid ones",
+        "PRINT {{last_request.method}}' '{{last_request.url}}",
         "# None of the lines after exit should execute or give errors",
         "EXIT",
         "# not comments",
@@ -186,6 +190,8 @@ test "File reads through entire file" {
         "GET https://jsonplaceholder.typicode.com/posts/1",
         "# nor invalid lines",
         "get some json please",
+        "# nor print statements",
+        "PRINT invisible",
     };
 
     var eof = false;

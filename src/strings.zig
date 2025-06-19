@@ -128,7 +128,7 @@ test endsWith {
     try expect(!endsWith("a test", "test1"));
 
     try expect(!endsWith("a test", "Test"));
-    try expect(!endsWith("a test", "Test1"));
+    try expect(!endsWith("a test something", "Test1"));
 }
 
 test toOwned {

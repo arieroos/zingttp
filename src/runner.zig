@@ -8,6 +8,9 @@ const debug = @import("debug.zig");
 
 const scanner = @import("scanner.zig");
 const parser = @import("parser.zig");
+const RequestExpr = parser.Request;
+const ArgList = parser.ArgList;
+
 const repl = @import("repl.zig");
 const http = @import("http.zig");
 const file = @import("file.zig");
@@ -89,6 +92,47 @@ pub const UserInterface = union(enum) {
     }
 };
 
+const Variable = union(enum) {
+    boolean: bool,
+    int: i128,
+    float: f128,
+    string: String,
+    list: std.ArrayList(Variable),
+    map: std.StringHashMap(Variable),
+
+    pub fn fromBool(val: bool) Variable {
+        return Variable{ .boolean = val };
+    }
+
+    pub fn fromInt(comptime T: type, val: T) Variable {
+        switch (@typeInfo(T)) {
+            .int => {},
+            else => @compileError(@typeName(T) ++ " is not an integer type"),
+        }
+
+        return Variable{ .int = val };
+    }
+
+    pub fn fromStr(str: String, allocator: std.mem.Allocator) !Variable {
+        const owned = try strings.toOwned(str, allocator);
+        return Variable{ .string = owned };
+    }
+
+    pub fn deinit(self: *Variable, allocator: std.mem.Allocator) void {
+        switch (self.*) {
+            .boolean, .int, .float => {},
+            .string => |s| allocator.free(s),
+            .list => |*l| {
+                for (l.items) |*e| {
+                    e.deinit(allocator);
+                }
+                l.clearAndFree();
+            },
+            .map => |*m| m.deinit(),
+        }
+    }
+};
+
 const Context = struct {
     allocator: std.mem.Allocator,
 
@@ -109,10 +153,77 @@ const Context = struct {
         if (self.last_req) |*r| r.deinit();
         self.client.deinit();
     }
-};
 
-const RequestExpr = parser.Request;
-const ArgList = parser.ArgList;
+    fn resolveVariable(self: *Context, key: String) !?Variable {
+        var spliterator = std.mem.splitScalar(u8, key, '.');
+
+        while (spliterator.next()) |part| {
+            if (part.len == 0) {
+                continue;
+            }
+            return if (strings.eql(part, "last_request"))
+                try self.resolveReqVariable(spliterator.rest())
+            else
+                null;
+        }
+
+        return null;
+    }
+
+    fn resolveReqVariable(self: *Context, key: String) !?Variable {
+        if (self.last_req == null) {
+            return null;
+        }
+        const lr = self.last_req.?;
+
+        var spliterator = std.mem.splitScalar(u8, key, '.');
+
+        while (spliterator.next()) |part| {
+            if (part.len == 0) {
+                continue;
+            }
+
+            while (spliterator.peek()) |p| {
+                if (p.len > 0) {
+                    break;
+                }
+                _ = spliterator.next();
+            }
+
+            if (strings.eql(part, "method") and spliterator.peek() == null)
+                return try Variable.fromStr(lr.method, self.allocator);
+            if (strings.eql(part, "url") and spliterator.peek() == null)
+                return try Variable.fromStr(lr.url, self.allocator);
+            if (strings.eql(part, "time_spent") and spliterator.peek() == null)
+                return Variable.fromInt(u64, lr.time_spent / std.time.ns_per_ms);
+            if (strings.eql(part, "success") and spliterator.peek() == null)
+                return Variable.fromBool(switch (lr.response) {
+                    .failure => false,
+                    .success => true,
+                });
+
+            if (strings.eql(part, "headers"))
+                return try Variable.fromStr("TODO req headers", self.allocator); // TODO:resolve headers
+        }
+
+        var buf: [1024]u8 = undefined;
+        const msg = try switch (lr.response) {
+            .failure => std.fmt.bufPrint(&buf, "{s} request to {s} failed: {s}: {s}", .{
+                lr.method,
+                lr.url,
+                lr.response.failure.reason,
+                @errorName(lr.response.failure.base_err),
+            }),
+            .success => std.fmt.bufPrint(&buf, "{s} request to {s} succeeded: {} - {s}", .{
+                lr.method,
+                lr.url,
+                lr.response.success.code,
+                std.http.Status.phrase(lr.response.success.code) orelse "Unknown",
+            }),
+        };
+        return try Variable.fromStr(msg, self.allocator);
+    }
+};
 
 pub fn run(ui: *UserInterface, allocator: std.mem.Allocator) !void {
     var ctx = Context{ .allocator = allocator, .client = http.client(allocator), .ui = ui };
@@ -150,9 +261,10 @@ fn doRequest(ctx: *Context, req: RequestExpr) !void {
     const url = try resolveArguments(ctx, req.arguments);
     defer ctx.allocator.free(url);
 
-    const result = ctx.client.do(req.method, url, ctx.options);
+    var result = try http.Request.init(req.method, url, ctx.allocator);
+    errdefer result.deinit();
 
-    ctx.last_req = result;
+    _ = ctx.client.do(&result, ctx.options);
     switch (result.response) {
         .failure => |err| {
             try ctx.ui.print(
@@ -169,6 +281,7 @@ fn doRequest(ctx: *Context, req: RequestExpr) !void {
             );
         },
     }
+    ctx.last_req = result;
 }
 
 fn doPrint(ctx: *Context, args: ArgList) !void {
@@ -186,10 +299,28 @@ fn resolveArguments(ctx: *Context, args: ArgList) !String {
     var str_builder = StringBuilder.init(ctx.allocator);
     defer str_builder.clearAndFree();
 
-    for (args.items) |arg| {
+    f: for (args.items) |arg| {
         switch (arg) {
             .value => |v| try str_builder.appendSlice(v),
-            .variable => |v| try str_builder.appendSlice(v),
+            .variable => |v| {
+                var variable = try ctx.resolveVariable(v);
+                if (variable == null) {
+                    debug.println("{s} has null value", .{v});
+                    continue :f;
+                }
+                defer variable.?.deinit(ctx.allocator);
+
+                const v_str = try switch (variable.?) {
+                    .string => |s| strings.toOwned(s, ctx.allocator),
+                    inline .boolean, .int, .float => |x| std.fmt.allocPrint(ctx.allocator, "{}", .{x}),
+                    else => |t| std.fmt.allocPrint(ctx.allocator, "TODO: stringify {s}", .{
+                        @typeName(@TypeOf(t)),
+                    }),
+                };
+                defer ctx.allocator.free(v_str);
+
+                try str_builder.appendSlice(v_str);
+            },
         }
     }
 
@@ -223,7 +354,7 @@ test "run can make a request and print the requested url" {
     const cmds = [_]String{
         "GET https://jsonplaceholder.typicode.com/posts/1",
         "PRINT Done",
-        "PRINT Made' a '{{last_reg.method}}' request to '{{ last_req.url }}",
+        "PRINT Made' a '{{last_request.method}}' request to '{{ last_request.url }}",
     };
     var test_ui = makeTestUi(&cmds);
     defer test_ui.testing.deinit();
@@ -240,16 +371,13 @@ fn makeTestResponse(body: String) !http.Request {
     var body_arr = std.ArrayList(u8).init(test_alloc);
     try body_arr.appendSlice(body);
 
-    return http.Request{
+    var req = try http.Request.init("GET", "http://some_site.com", test_alloc);
+    req.response = .{ .success = .{
+        .body = body_arr,
         .headers = http.HeaderMap.init(test_alloc),
-        .method = "",
-        .url = "",
-        .response = .{ .success = .{
-            .body = body_arr,
-            .headers = http.HeaderMap.init(test_alloc),
-            .code = std.http.Status.ok,
-        } },
-    };
+        .code = std.http.Status.ok,
+    } };
+    return req;
 }
 
 test "Context.updateLastResponse does not leak memory" {
@@ -267,10 +395,12 @@ test "resolveArguments resolves arguments" {
     var ctx = makeTestCtx();
     defer ctx.deinit();
 
+    ctx.updateLastResponse(try makeTestResponse(""));
+
     const args = [_]parser.Argument{
         .{ .value = "Made" },
         .{ .value = " a " },
-        .{ .variable = "last_req.method" },
+        .{ .variable = "last_request.method" },
         .{ .value = " Request" },
     };
     var arg_list = try ArgList.initCapacity(test_alloc, args.len);
@@ -293,7 +423,11 @@ fn makeTestUiFromFile(file_path: String, allocator: std.mem.Allocator) !UserInte
     while (!eof) {
         var array_list = std.ArrayList(u8).init(allocator);
 
-        file_reader.streamUntilDelimiter(array_list.writer(), '\n', line_size) catch |err| switch (err) {
+        file_reader.streamUntilDelimiter(
+            array_list.writer(),
+            '\n',
+            line_size,
+        ) catch |err| switch (err) {
             error.EndOfStream => eof = true,
             else => return err,
         };
@@ -314,15 +448,32 @@ fn runFileTest(file_name: String, expected_lines: []const String) !void {
     try run(&test_ui, test_alloc);
 
     const outputs = test_ui.testing.getOutputMsgs();
-    try expect(outputs.len == expected_lines.len);
-    for (outputs, expected_lines) |output, expected| {
+
+    const min = @min(outputs.len, expected_lines.len);
+
+    for (outputs[0..min], expected_lines[0..min]) |output, expected| {
         try expectStringStartsWith(output, expected);
+    }
+
+    if (expected_lines.len > min) {
+        for (expected_lines[min..]) |l| {
+            std.log.err("Missing line from output: {s}", .{l});
+        }
+        try expect(false);
+    }
+
+    if (outputs.len > min) {
+        for (outputs[min..]) |l| {
+            std.log.err("Unexpected line in ouput: {s}", .{l});
+        }
+        try expect(false);
     }
 }
 
 test "Run basic file" {
     const expecteds = &[_]String{
         "Received response 200 (OK): 292 bytes in",
+        "GET sent to https://jsonplaceholder.typicode.com/posts/1",
     };
     try runFileTest("tests/basic.http", expecteds);
 }
@@ -335,6 +486,24 @@ test "Run invalid file" {
         "Error: Missing value or variable at 4\n",
         "Error: Expected value or variable but found keyword at 4: \"EXIT\"\n",
         "Received response 200 (OK): 292 bytes in",
+        "Error: Expected value or variable but found whitespace at 9: ",
+        "GET https://jsonplaceholder.typicode.com/posts/1",
     };
     try runFileTest("tests/invalid.http", expecteds);
+}
+
+test "Run print file" {
+    const expecteds = &[_]String{
+        "argument",
+        "literal argument",
+        "",
+        "",
+        "Received response 200 (OK):",
+        "GET request to https://jsonplaceholder.typicode.com/posts/1 succeeded: http.Status.ok - OK",
+        "GET",
+        "GET",
+        "GET",
+        "Hi mom! I made a \"GET\" request to https://jsonplaceholder.typicode.com/posts/1!",
+    };
+    try runFileTest("tests/print.http", expecteds);
 }

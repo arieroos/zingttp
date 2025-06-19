@@ -32,6 +32,7 @@ pub const HeaderMap = struct {
 
     fn genEntry(self: *HeaderMap, key: String) !MapType.Entry {
         const owned_key = try std.ascii.allocLowerString(self.allocator, key);
+        errdefer self.allocator.free(owned_key);
 
         const entry = try self.map.getOrPut(owned_key);
         if (!entry.found_existing) {
@@ -39,6 +40,7 @@ pub const HeaderMap = struct {
             arrayList.* = std.ArrayList(String).init(self.allocator);
             entry.value_ptr.* = arrayList;
         }
+
         return self.map.getEntry(owned_key).?;
     }
 
@@ -82,6 +84,7 @@ pub const HeaderMap = struct {
 
 const ErrReason = enum {
     timer,
+    url_alloc,
     header_alloc,
     uri,
     open,
@@ -95,6 +98,7 @@ const ErrReason = enum {
 pub fn ErrDescription(comptime reason: ErrReason) String {
     return comptime switch (reason) {
         .timer => "Failed to initialise timer",
+        .url_alloc => "Failed to allocate memory for storing the url",
         .header_alloc => "Could not allocate memory for storing headers",
         .uri => "Could not parse URI",
         .open => "Could not open connection",
@@ -119,6 +123,8 @@ pub const Response = union(enum) {
 };
 
 pub const Request = struct {
+    allocator: std.mem.Allocator,
+
     method: String,
     url: String,
     headers: HeaderMap,
@@ -129,7 +135,19 @@ pub const Request = struct {
     } },
     time_spent: u64 = 0,
 
+    pub fn init(method: String, url: String, allocator: std.mem.Allocator) !Request {
+        return Request{
+            .allocator = allocator,
+            .method = try strings.toOwned(method, allocator),
+            .url = try strings.toOwned(url, allocator),
+            .headers = HeaderMap.init(allocator),
+        };
+    }
+
     pub fn deinit(self: *Request) void {
+        self.allocator.free(self.url);
+        self.allocator.free(self.method);
+
         self.headers.deinit();
 
         switch (self.response) {
@@ -151,17 +169,11 @@ pub const Client = struct {
     client: StdClient,
     allocator: std.mem.Allocator,
 
-    pub fn do(self: *Client, method_str: String, url: String, options: Options) Request {
-        debug.println("Initiating {s} request to {s}", .{ method_str, url });
-
-        var request = Request{
-            .method = method_str,
-            .url = url,
-            .headers = HeaderMap.init(self.allocator),
-        };
+    pub fn do(self: *Client, request: *Request, options: Options) *Request {
+        debug.println("Initiating {s} request to {s}", .{ request.method, request.url });
 
         var timer = std.time.Timer.start() catch |err| return genErrResp(
-            &request,
+            request,
             err,
             0,
             ErrReason.timer,
@@ -170,12 +182,12 @@ pub const Client = struct {
         const server_header_buf = self.allocator.alloc(
             u8,
             options.header_buffer_size_kb * 1024,
-        ) catch |err| return genErrResp(&request, err, timer.read(), ErrReason.header_alloc);
+        ) catch |err| return genErrResp(request, err, timer.read(), ErrReason.header_alloc);
         defer self.allocator.free(server_header_buf);
 
-        const method: http.Method = @enumFromInt(http.Method.parse(method_str));
-        const uri = std.Uri.parse(url) catch |err| return genErrResp(
-            &request,
+        const method: http.Method = @enumFromInt(http.Method.parse(request.method));
+        const uri = std.Uri.parse(request.url) catch |err| return genErrResp(
+            request,
             err,
             timer.read(),
             ErrReason.uri,
@@ -185,19 +197,20 @@ pub const Client = struct {
         var req = StdClient.open(&self.client, method, uri, .{
             .server_header_buffer = server_header_buf,
             .redirect_behavior = StdClient.Request.RedirectBehavior.unhandled,
-        }) catch |err| return genErrResp(&request, err, timer.read(), ErrReason.open);
+        }) catch |err| return genErrResp(request, err, timer.read(), ErrReason.open);
         defer req.deinit();
 
-        req.send() catch |err| return genErrResp(&request, err, timer.read(), ErrReason.send);
-        req.finish() catch |err| return genErrResp(&request, err, timer.read(), ErrReason.finish);
+        debug.println("Sending data to {s}", .{uri.host.?.percent_encoded});
+        req.send() catch |err| return genErrResp(request, err, timer.read(), ErrReason.send);
+        req.finish() catch |err| return genErrResp(request, err, timer.read(), ErrReason.finish);
 
         debug.println("Waiting for reply from {s}", .{uri.host.?.percent_encoded});
-        req.wait() catch |err| return genErrResp(&request, err, timer.read(), ErrReason.wait);
+        req.wait() catch |err| return genErrResp(request, err, timer.read(), ErrReason.wait);
 
         const header_map = scanHeaders(
             server_header_buf,
             self.allocator,
-        ) catch |err| return genErrResp(&request, err, timer.read(), ErrReason.header_scan);
+        ) catch |err| return genErrResp(request, err, timer.read(), ErrReason.header_scan);
 
         var response_body = StringBuilder.init(self.allocator);
         const max = options.max_response_mem_mb * 1024;
@@ -205,9 +218,9 @@ pub const Client = struct {
         // TODO: Find a way to handle large responses, by maybe writing them to a file.
 
         req.reader().readAllArrayList(&response_body, max) catch |err| return genErrResp(
-            &request,
+            request,
             err,
-            0,
+            timer.read(),
             ErrReason.read,
         );
 
@@ -220,7 +233,7 @@ pub const Client = struct {
 
         if (debug.isActive()) {
             const time_str = std.fmt.fmtDuration(request.time_spent);
-            debug.println("Finsihed {s} request to {s} in {s}", .{ method_str, url, time_str });
+            debug.println("Finsihed {s} request to {s} in {s}", .{ request.method, request.url, time_str });
         }
         return request;
     }
@@ -230,13 +243,13 @@ pub const Client = struct {
     }
 };
 
-fn genErrResp(request: *Request, err: anyerror, elapsed: u64, comptime reason: ErrReason) Request {
+fn genErrResp(request: *Request, err: anyerror, elapsed: u64, comptime reason: ErrReason) *Request {
     request.response = .{ .failure = .{
         .base_err = err,
         .reason = ErrDescription(reason),
     } };
     request.time_spent = elapsed;
-    return request.*;
+    return request;
 }
 
 fn scanHeaders(header_buf: String, allocator: std.mem.Allocator) !HeaderMap {
@@ -317,31 +330,26 @@ test Client {
     var test_client = client(test_allocator);
     defer test_client.deinit();
 
-    var result = test_client.do("GET", "https://jsonplaceholder.typicode.com/posts/1", .{});
+    var req = try Request.init("GET", "https://jsonplaceholder.typicode.com/posts/1", test_allocator);
+    var result = test_client.do(&req, .{});
     defer result.deinit();
 }
 
 test "Request deinit works" {
-    var req_headers = HeaderMap.init(test_allocator);
-    try req_headers.putSingle("Content-Type", "application/json");
-
     var resp_headers = HeaderMap.init(test_allocator);
     try resp_headers.putSingle("Content-Type", "application/json");
 
     var resp_body = StringBuilder.init(test_allocator);
     try resp_body.appendSlice("hello\n");
 
-    var req = Request{
-        .headers = req_headers,
-        .method = "GET",
-        .url = "http://some_site.com",
-        .time_spent = 128,
-        .response = .{ .success = .{
-            .headers = resp_headers,
-            .body = resp_body,
-            .code = http.Status.ok,
-        } },
-    };
+    var req = try Request.init("GET", "http://some_site.com", test_allocator);
+    try req.headers.putSingle("Content-Type", "application/json");
+    req.time_spent = 128;
+    req.response = .{ .success = .{
+        .headers = resp_headers,
+        .body = resp_body,
+        .code = http.Status.ok,
+    } };
 
     req.deinit();
     try expect(!std.testing.allocator_instance.detectLeaks());

@@ -1,0 +1,30 @@
+# A test script to demonstrate how printing works
+
+# A print is always followed by an argument
+PRINT argument
+PRINT "literal argument"
+PRINT {{ variable }}
+
+# Note that if you run this script, the third PRINT prints an empty line
+# This is because the variable has not been defined
+
+# One way to define variables, is by performing a request
+# The request will populate the last_request variable
+# Which is null now
+PRINT {{ last_request }}
+
+GET https://jsonplaceholder.typicode.com/posts/1
+# But should have a value now
+PRINT {{ last_request }}
+
+# Some variables may have sub-fields
+# These can be access with the dot syntax
+PRINT {{ last_request.method }}
+
+# Empty path parts are ignored, the two PRINTS below should print the same value
+PRINT {{ last_request.method }}
+PRINT {{ .last_request..method. }}
+
+# Arguments can be concatenanted by not leaving space between them
+PRINT "Hi mom! I "made' a "'{{ last_request.method }}'" 'request' to '{{ last_request.url }}!
+
