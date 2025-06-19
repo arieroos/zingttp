@@ -34,6 +34,7 @@ const Result = enum {
     success,
     failure,
     leaked,
+    skipped,
 };
 
 pub fn main() !void {
@@ -41,6 +42,22 @@ pub fn main() !void {
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
+
+    var args = try std.process.ArgIterator.initWithAllocator(gpa.allocator());
+    defer args.deinit();
+
+    _ = args.skip();
+    var expect_filter = false;
+    var filter: []const u8 = "";
+    while (args.next()) |arg| {
+        if (expect_filter) {
+            filter = arg;
+            break;
+        }
+        if (std.mem.eql(u8, arg, "--filter") or std.mem.eql(u8, arg, "-f")) {
+            expect_filter = true;
+        }
+    }
 
     var results = std.AutoHashMap(Result, usize).init(gpa.allocator());
     defer results.clearAndFree();
@@ -52,19 +69,24 @@ pub fn main() !void {
         if (std.mem.eql(u8, t.name, "main.test_0")) {
             continue;
         }
-        const result = runTest(t);
+
+        const result = if (filter.len > 0 and !std.mem.containsAtLeast(u8, t.name, 1, filter))
+            Result.skipped
+        else
+            runTest(t);
 
         const resultCnt = results.get(result) orelse 0;
         try results.put(result, resultCnt + 1);
     }
     const elapsed = timer.read();
 
-    inline for ([_]Result{ Result.failure, Result.leaked, Result.success }) |result| {
+    inline for ([_]Result{ Result.skipped, Result.failure, Result.leaked, Result.success }) |result| {
         const count = results.get(result);
         if (count) |c| {
             const ansi = switch (result) {
                 .failure, .leaked => AnsiEsc.red,
                 .success => AnsiEsc.green,
+                .skipped => AnsiEsc.yellow,
             };
             println_fmt(ansi, "{s}: {}/{}", .{ @tagName(result), c, test_cnt });
         }
