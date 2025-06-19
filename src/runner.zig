@@ -105,7 +105,7 @@ const Context = struct {
     }
 };
 
-const Command = parser.Command;
+const Request = parser.Request;
 
 pub fn run(ui: *UserInterface, allocator: std.mem.Allocator) !void {
     var ctx = Context{ .client = http.client(allocator), .ui = ui };
@@ -123,21 +123,24 @@ pub fn run(ui: *UserInterface, allocator: std.mem.Allocator) !void {
         var tokens = try scanner.scan(line, allocator);
         defer tokens.deinit();
 
-        const expression = try parser.parse(tokens);
+        var expression = try parser.parse(tokens, allocator);
+        defer expression.deinit(allocator);
+
         switch (expression) {
             .nothing => continue,
             .exit => {
                 ui.exit();
                 break;
             },
-            .invalid => |inv| try ui.print("Error: {s}\n", .{inv.message}),
-            .command => |cmd| try run_command(&ctx, cmd),
+            .invalid => |inv| try ui.print("Error: {s}\n", .{inv}),
+            .request => |req| try do_request(&ctx, req),
+            .print => try ui.print("PRINT\n", .{}),
         }
     }
 }
 
-fn run_command(ctx: *Context, cmd: Command) !void {
-    const result = ctx.client.do(cmd.command, cmd.argument, ctx.options);
+fn do_request(ctx: *Context, req: Request) !void {
+    const result = ctx.client.do(req.method, req.arguments.items[0].value, ctx.options);
 
     ctx.last_req = result;
     switch (result.response) {
@@ -254,10 +257,10 @@ test "Run basic file" {
 test "Run invalid file" {
     const expecteds = &[_][]const u8{
         "Error: Statement does not start with keyword\n",
-        "Error: Unexpected token at 5: \"after\"\n",
-        "Error: Unexpected token at 42: \"posts/1\"\n",
-        "Error: Missing value at 5\n",
-        "Error: Expected value but found keyword at 4: \"EXIT\"\n",
+        "Error: Unexpected token at 4: \" \"\n",
+        "Error: Expected value or variable but found whitespace at 41: \" \"\n",
+        "Error: Missing value or variable at 4\n",
+        "Error: Expected value or variable but found keyword at 4: \"EXIT\"\n",
         "Received response 200 (OK): 292 bytes in",
     };
     try runFileTest("tests/invalid.http", expecteds);

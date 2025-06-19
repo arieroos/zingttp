@@ -21,21 +21,25 @@ pub const Token = union(enum) {
     value: String,
     keyword: Keyword,
     variable: String,
+    whitespace: usize,
     invalid: String,
 
     pub fn toString(self: Token, buffer: []u8) []u8 {
-        const typeStr = @tagName(self);
-        const valStr = switch (self) {
+        var temp_buf: [16]u8 = undefined;
+
+        const type_str = @tagName(self);
+        const val_str = switch (self) {
             .keyword => |kw| @tagName(kw),
+            .whitespace => |l| std.fmt.bufPrint(&temp_buf, "{}", .{l}) catch &temp_buf,
             inline else => |v| v,
         };
 
-        const maxValLen = @max(buffer.len - typeStr.len - 2, 0);
-        const printVal = if (valStr.len <= maxValLen)
-            valStr
+        const max_len = @max(buffer.len - type_str.len - 2, 0);
+        const print_val = if (val_str.len <= max_len)
+            val_str
         else
-            valStr[0..maxValLen];
-        return std.fmt.bufPrint(buffer, "{s}: {s}", .{ typeStr, printVal }) catch buffer;
+            val_str[0..max_len];
+        return std.fmt.bufPrint(buffer, "{s}: {s}", .{ type_str, print_val }) catch buffer;
     }
 
     pub fn isKeyword(self: Token, keyword: Keyword) bool {
@@ -103,11 +107,15 @@ const Scanner = struct {
     }
 
     fn scanNextToken(self: *Scanner) ?TokenInfo {
+        self.start = self.idx;
         while (self.current() == ' ' and !self.done()) {
             self.advance();
         }
-        if (self.done()) {
+        if (self.done() or self.current() == '#') {
             return null;
+        }
+        if (self.start > 0 and self.start < self.idx) {
+            return self.genTokenInfo(Token{ .whitespace = self.idx - self.start });
         }
         self.start = self.idx;
 
@@ -290,8 +298,8 @@ test scan {
         defer tokens.deinit();
 
         try expectTokenToBeKeywordAt(tokens.items[0], Keyword.GET, 0);
-        try expectTokenToBeValueAt(tokens.items[1], "http://some_site.com", 4);
-        try expect(tokens.items.len == 2);
+        try expectTokenToBeValueAt(tokens.items[2], "http://some_site.com", 4);
+        try expect(tokens.items.len == 3);
     }
     {
         const test_val = "http://some_site.com/space=in url";
@@ -299,16 +307,16 @@ test scan {
         defer tokens.deinit();
 
         try expectTokenToBeKeywordAt(tokens.items[0], Keyword.PUT, 0);
-        try expectTokenToBeValueAt(tokens.items[1], test_val, 4);
-        try expect(tokens.items.len == 2);
+        try expectTokenToBeValueAt(tokens.items[2], test_val, 4);
+        try expect(tokens.items.len == 3);
     }
     {
         const tokens = try scan("PRINT {{ some.variable }}", test_allocator);
         defer tokens.deinit();
 
         try expectTokenToBeKeywordAt(tokens.items[0], Keyword.PRINT, 0);
-        try expectTokenToBeVarAt(tokens.items[1], "some.variable", 6);
-        try expect(tokens.items.len == 2);
+        try expectTokenToBeVarAt(tokens.items[2], "some.variable", 6);
+        try expect(tokens.items.len == 3);
     }
 }
 
@@ -319,9 +327,9 @@ test "scan ignores spaces" {
 
     tokens = try scan("   DELETE     someURL  ", test_allocator);
     defer tokens.deinit();
-    try expect(tokens.items.len == 2);
+    try expect(tokens.items.len == 3);
     try expect(tokens.items[0].pos == 3);
-    try expect(tokens.items[1].pos == 14);
+    try expect(tokens.items[2].pos == 14);
 }
 
 test "scan works with long strings" {
@@ -331,7 +339,7 @@ test "scan works with long strings" {
     defer tokens.deinit();
 
     var buffer: [32]u8 = undefined;
-    try expectStringStartsWith("value: This_is_a_very_long_strin", tokens.items[1].token.toString(&buffer));
+    try expectStringStartsWith("value: This_is_a_very_long_strin", tokens.items[2].token.toString(&buffer));
 }
 
 test "scan stops at comment" {
@@ -346,13 +354,21 @@ test "scan stops at comment" {
         TestCase{ .tst = "   #", .exp = 0 },
         TestCase{ .tst = " # spaced comment", .exp = 0 },
         TestCase{ .tst = "EXIT # we are done", .exp = 1 },
-        TestCase{ .tst = "GET http://somesite.com # GET request ", .exp = 2 },
+        TestCase{ .tst = "GET http://somesite.com # GET request ", .exp = 3 },
     };
     for (tests) |case| {
         const tokens = try scan(case.tst, test_allocator);
         defer tokens.deinit();
 
-        try expect(tokens.items.len == case.exp);
+        if (tokens.items.len == case.exp) {
+            try expect(true);
+        } else {
+            std.log.err(
+                "Expect token length {} for {s}, but got {}\n",
+                .{ case.exp, case.tst, tokens.items.len },
+            );
+            try expect(false);
+        }
     }
 }
 
