@@ -52,14 +52,16 @@ pub const TokenList = std.ArrayList(TokenInfo);
 const InvalidType = enum {
     unclosed_variable,
     invalid_variable,
+    empty_variable,
     unclosed_quote,
 };
 
 fn InvalidReason(comptime t: InvalidType) String {
     return comptime switch (t) {
         .unclosed_quote => "Unclosed qoute",
-        .invalid_variable => "Invalid character in variable",
-        .unclosed_variable => "Unclosed Variable",
+        .invalid_variable => "Invalid character in variable reference",
+        .unclosed_variable => "Unclosed variable reference",
+        .empty_variable => "Empty variable reference",
     };
 }
 
@@ -93,7 +95,7 @@ const Scanner = struct {
     }
 
     fn current(self: *Scanner) u8 {
-        return if (!self.done()) self.line[self.idx] else '#';
+        return if (!self.done()) self.line[self.idx] else 0;
     }
 
     fn lexeme(self: *Scanner) String {
@@ -128,8 +130,12 @@ const Scanner = struct {
         }
 
         while (!strings.endsWith(self.lexeme(), "}}") and !self.done()) {
-            if (self.current() == ' ')
+            if (self.current() == ' ') {
                 self.skipSpaces();
+                if (self.current() != '}') {
+                    return self.invalid(InvalidType.invalid_variable);
+                }
+            }
 
             const c = self.current();
             if (!std.ascii.isAlphanumeric(c) and c != '}' and c != '_' and c != '.')
@@ -138,10 +144,14 @@ const Scanner = struct {
             self.advance();
         }
 
-        return if (strings.endsWith(self.lexeme(), "}}"))
-            self.genTokenInfo(Token{ .variable = strings.trimWhitespace(self.trimLexeme(2)) })
-        else
-            self.invalid(InvalidType.unclosed_variable);
+        if (strings.endsWith(self.lexeme(), "}}")) {
+            const var_name = strings.trimWhitespace(self.trimLexeme(2));
+            if (var_name.len == 0) {
+                return self.invalid(InvalidType.empty_variable);
+            }
+            return self.genTokenInfo(Token{ .variable = var_name });
+        }
+        return self.invalid(InvalidType.unclosed_variable);
     }
 
     fn skipSpaces(self: *Scanner) void {
@@ -354,34 +364,55 @@ test "Scanner.scanNextToken scans single token" {
 }
 
 test "Scanner.scanNextToken scans second token" {
-    const testStr = "012 456 89";
+    const test_str = "012 456 89";
 
-    var scanner = Scanner{ .line = testStr, .idx = 4 };
+    var scanner = Scanner{ .line = test_str, .idx = 4 };
     const token = scanner.scanNextToken();
 
     try expectTokenToBeValueAt(token.?, "456", 4);
 }
 
 test "Scanner.scanNextToken scans entire quote" {
-    const testStr = "\"12 45\"";
-    var scanner = Scanner{ .line = testStr };
+    const test_str = "\"12 45\"";
+    var scanner = Scanner{ .line = test_str };
     const token = scanner.scanNextToken();
 
     try expectTokenToBeValueAt(token.?, "12 45", 0);
 }
 
 test "Scanner.scanVariable scans variable" {
-    const testStr = "{{ 12_45 }}";
-    var scanner = Scanner{ .line = testStr };
+    const test_str = "{{ 12_45 }}";
+    var scanner = Scanner{ .line = test_str };
     const token = scanner.scanVariable();
 
     try expectTokenToBeVarAt(token.?, "12_45", 0);
 }
 
+test "Scanner.scanVariable breaks when it should" {
+    const test_strs = &[_]String{ "{{}}", "{{", "{{ kl{{ }}", "{{ }}", "{{ f f }}", "{{ f#f }}" };
+
+    inline for (test_strs) |test_str| {
+        var scanner = Scanner{ .line = test_str };
+        const token = scanner.scanVariable();
+
+        switch (token.?.token) {
+            .invalid => try expect(true),
+            else => {
+                var buf: [128]u8 = undefined;
+                std.log.err(
+                    "Expected invalid token for {s}, but got {s}",
+                    .{ test_str, token.?.token.toString(&buf) },
+                );
+                try expect(false);
+            },
+        }
+    }
+}
+
 test "Scanner.scanQuoted scans inside quote" {
-    const testStr = "'12 45'7";
-    var scanner = Scanner{ .line = testStr };
-    const token = scanner.scanQuoted(testStr[0]);
+    const test_str = "'12 45'7";
+    var scanner = Scanner{ .line = test_str };
+    const token = scanner.scanQuoted(test_str[0]);
 
     try expectTokenToBeValueAt(token, "12 45", 0);
 }
