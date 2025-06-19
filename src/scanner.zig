@@ -356,6 +356,39 @@ test "scan stops at comment" {
     }
 }
 
+test "scan correctly scans consecutive values" {
+    const test_lines = &[_]String{
+        "{{ some_var }}'some string'some_raw",
+        "{{ some_var }}some_raw'some string",
+        "'some string'some_raw{{ some_var }}",
+        "'some_string'{{ some_var }}some_raw",
+        "some-raw{{ some_var }}'some string'",
+        "some-raw'some_string'{{ some_var }}",
+    };
+
+    inline for (test_lines) |line| {
+        var tokens = try scan(line, test_allocator);
+        defer tokens.clearAndFree();
+
+        try expect(tokens.items.len == 3);
+        inline for (0..2) |i| {
+            const token = tokens.items[i];
+
+            switch (token.token) {
+                .value, .variable => |v| try expectStringStartsWith(v, "some"),
+                else => {
+                    var b: [256]u8 = undefined;
+                    std.log.err(
+                        "failure with {s}: got {s} at {}",
+                        .{ line, token.token.toString(&b), i },
+                    );
+                    try expect(false);
+                },
+            }
+        }
+    }
+}
+
 test "Scanner.scanNextToken scans single token" {
     var scanner = Scanner{ .line = "hgl" };
     const token = scanner.scanNextToken();
