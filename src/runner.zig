@@ -145,12 +145,7 @@ const Context = struct {
                 continue;
             }
 
-            while (spliterator.peek()) |p| {
-                if (p.len > 0) {
-                    break;
-                }
-                _ = spliterator.next();
-            }
+            advanceSpliterator(&spliterator);
 
             if (strings.eql(part, "method") and spliterator.peek() == null)
                 return try Variable.fromStr(lr.method.value, self.allocator);
@@ -166,6 +161,8 @@ const Context = struct {
 
             if (strings.eql(part, "headers"))
                 return resolveHeaderVariable(self.last_req.?.headers, spliterator.rest(), self.allocator);
+
+            return null;
         }
 
         var buf: [1024]u8 = undefined;
