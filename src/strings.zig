@@ -2,13 +2,13 @@ const std = @import("std");
 const mem = std.mem;
 const ascii = std.ascii;
 
-const Allocator = std.mem.Allocator;
+const Allocator = mem.Allocator;
 
 pub const String = []const u8;
 pub const StringBuilder = std.ArrayList(u8);
 
 pub const AllocString = struct {
-    allocator: std.mem.Allocator,
+    allocator: Allocator,
     value: String,
 
     pub fn init(val: String, allocator: Allocator) !AllocString {
@@ -66,7 +66,7 @@ pub fn endsWith(haystack: String, needle: String) bool {
     return mem.endsWith(u8, haystack, needle);
 }
 
-pub fn toOwned(val: String, allocator: std.mem.Allocator) !String {
+pub fn toOwned(val: String, allocator: Allocator) Allocator.Error!String {
     const allocated = try allocator.alloc(u8, val.len);
     mem.copyForwards(u8, allocated, val);
     return allocated;
