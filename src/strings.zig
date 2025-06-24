@@ -2,8 +2,26 @@ const std = @import("std");
 const mem = std.mem;
 const ascii = std.ascii;
 
+const Allocator = std.mem.Allocator;
+
 pub const String = []const u8;
 pub const StringBuilder = std.ArrayList(u8);
+
+pub const AllocString = struct {
+    allocator: std.mem.Allocator,
+    value: String,
+
+    pub fn init(val: String, allocator: Allocator) !AllocString {
+        return AllocString{
+            .allocator = allocator,
+            .value = try toOwned(val, allocator),
+        };
+    }
+
+    pub fn deinit(self: *AllocString) void {
+        self.allocator.free(self.value);
+    }
+};
 
 pub fn eql(str1: String, str2: String) bool {
     return mem.eql(u8, str1, str2);
@@ -62,6 +80,30 @@ const expect = std.testing.expect;
 const expectError = std.testing.expectError;
 const expectEqualStrings = std.testing.expectEqualStrings;
 const test_alloc = std.testing.allocator;
+
+test AllocString {
+    const test_str = "Some test string";
+    var control: String = test_str[0..];
+    var result_str: ?AllocString = null;
+
+    {
+        const copied = try std.fmt.allocPrint(test_alloc, "{s}", .{test_str});
+        defer test_alloc.free(copied);
+
+        result_str = try AllocString.init(copied, test_alloc);
+        control = copied;
+    }
+    errdefer result_str.?.deinit();
+
+    try expectEqualStrings(test_str, result_str.?.value);
+    if (eql(control, result_str.?.value)) {
+        std.log.err("control string not cleared", .{});
+        try expect(false);
+    }
+
+    result_str.?.deinit();
+    try expect(!std.testing.allocator_instance.detectLeaks());
+}
 
 test eql {
     try expect(eql("", ""));
