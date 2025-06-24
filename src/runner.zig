@@ -302,7 +302,7 @@ fn resolveArguments(ctx: *Context, args: ArgList) !String {
         switch (arg) {
             .value => |v| try str_builder.appendSlice(v),
             .variable => |v| {
-                var val = try ctx.resolveReqVariable(v);
+                var val = try ctx.resolveVariable(v);
                 if (val == null) {
                     debug.println("{s} has null value", .{v});
                 } else {
@@ -429,6 +429,7 @@ test "resolveArguments resolves arguments" {
         .{ .value = " a " },
         .{ .variable = "last_request.method" },
         .{ .value = " Request" },
+        .{ .variable = "method" },
     };
     var arg_list = try ArgList.initCapacity(test_alloc, args.len);
     defer arg_list.clearAndFree();
