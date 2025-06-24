@@ -165,7 +165,7 @@ const Context = struct {
                 });
 
             if (strings.eql(part, "headers"))
-                return try Variable.fromStr("TODO req headers", self.allocator); // TODO:resolve headers
+                return resolveHeaderVariable(self.last_req.?.headers, spliterator.rest(), self.allocator);
         }
 
         var buf: [1024]u8 = undefined;
@@ -186,6 +186,54 @@ const Context = struct {
         return try Variable.fromStr(msg, self.allocator);
     }
 };
+
+fn resolveHeaderVariable(
+    headers: http.HeaderMap,
+    key: String,
+    allocator: std.mem.Allocator,
+) !?Variable {
+    var spliterator = std.mem.splitScalar(u8, key, '.');
+
+    while (spliterator.next()) |part| {
+        if (part.len == 0) {
+            continue;
+        }
+        advanceSpliterator(&spliterator);
+
+        const lower_part = try std.ascii.allocLowerString(allocator, part);
+        defer allocator.free(lower_part);
+
+        if (headers.map.get(lower_part)) |header| {
+            if (spliterator.next()) |idx_str| {
+                advanceSpliterator(&spliterator);
+                if (spliterator.peek() != null) {
+                    return null;
+                }
+                const idx = std.fmt.parseInt(usize, idx_str, 10) catch return null;
+                if (idx >= header.items.len) {
+                    return null;
+                }
+                return try Variable.fromStr(header.items[idx], allocator);
+            } else {
+                // TODO: find a way to represent the header values
+                return try Variable.fromStr("TODO req headers list", allocator);
+            }
+        } else {
+            return null;
+        }
+    }
+    // TODO: find a way to represent all the headers and their values
+    return try Variable.fromStr("TODO req headers full", allocator);
+}
+
+fn advanceSpliterator(s: *std.mem.SplitIterator(u8, std.mem.DelimiterType.scalar)) void {
+    while (s.peek()) |p| {
+        if (p.len > 0) {
+            break;
+        }
+        _ = s.next();
+    }
+}
 
 pub fn run(ui: *UserInterface, allocator: std.mem.Allocator) !void {
     var ctx = Context{ .allocator = allocator, .client = http.client(allocator), .ui = ui };
@@ -328,6 +376,7 @@ fn makeTestResponse(body: String) !http.Request {
     try body_arr.appendSlice(body);
 
     var req = try http.Request.init("GET", "http://some_site.com", test_alloc);
+    try req.headers.putSingle("Content-Type", "application/json");
     req.response = .{ .success = .{
         .body = body_arr,
         .headers = http.HeaderMap.init(test_alloc),
@@ -345,6 +394,38 @@ test "Context.updateLastResponse does not leak memory" {
 
     ctx.deinit();
     try expect(!std.testing.allocator_instance.detectLeaks());
+}
+
+test "Context.resolveReqVariable resolves request variables" {
+    var ctx = makeTestCtx();
+    defer ctx.deinit();
+
+    ctx.last_req = try makeTestResponse("Some data in the reply");
+
+    const cases = [_]struct { key: String, expected: String }{
+        .{ .key = "method", .expected = "GET" },
+        .{ .key = "url", .expected = "http://some_site.com" },
+        .{ .key = "time_spent", .expected = "0" },
+        .{ .key = "success", .expected = "true" },
+
+        .{ .key = "headers.Content-Type.0", .expected = "application/json" },
+
+        .{ .key = "", .expected = "GET request to http://some_site.com succeeded: http.Status.ok - OK" },
+    };
+
+    inline for (&cases) |case| {
+        var var_val = try ctx.resolveReqVariable(case.key);
+        if (var_val == null) {
+            std.log.err("Unexpected null value for key {s}", .{case.key});
+            try expect(false);
+        }
+        defer var_val.?.deinit();
+
+        const str = try var_val.?.toStrAlloc(test_alloc);
+        defer test_alloc.free(str);
+
+        try expectEqualStrings(case.expected, str);
+    }
 }
 
 test "resolveArguments resolves arguments" {

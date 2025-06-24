@@ -146,7 +146,11 @@ const Scanner = struct {
             }
 
             const c = self.current();
-            if (!std.ascii.isAlphanumeric(c) and c != '}' and c != '_' and c != '.')
+            const valid_c = std.ascii.isAlphanumeric(c) or switch (c) {
+                '}', '_', '-', '.' => true,
+                else => false,
+            };
+            if (!valid_c)
                 return self.invalid(InvalidType.invalid_variable);
 
             self.advance();

@@ -55,6 +55,7 @@ identifiers
 
 identifier
     '_'
+    '-'
     alphanumeric
     indentifier identifier
 

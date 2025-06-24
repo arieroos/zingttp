@@ -42,7 +42,7 @@ pub const HeaderMap = struct {
         return self.map.getEntry(owned_key).?;
     }
 
-    fn putSingle(self: *HeaderMap, key: String, value: String) !void {
+    pub fn putSingle(self: *HeaderMap, key: String, value: String) !void {
         const lower_key = try std.ascii.allocLowerString(self.allocator, key);
         defer self.allocator.free(lower_key);
 
@@ -50,14 +50,14 @@ pub const HeaderMap = struct {
         try entry.value_ptr.*.append(try strings.toOwned(value, self.allocator));
     }
 
-    fn getValues(self: *HeaderMap, key: String) ?[]String {
+    pub fn getValues(self: *HeaderMap, key: String) ?[]String {
         var lower_buf: [512]u8 = undefined;
         const lower_key = std.ascii.lowerString(&lower_buf, key);
 
         return if (self.map.get(lower_key)) |v| v.items else null;
     }
 
-    fn getValue(self: *HeaderMap, key: String, idx: usize) ?String {
+    pub fn getValue(self: *HeaderMap, key: String, idx: usize) ?String {
         return if (self.getValues(key)) |v|
             if (v.len > idx) v[idx] else null
         else
