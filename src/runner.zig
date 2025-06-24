@@ -11,6 +11,9 @@ const parser = @import("parser.zig");
 const RequestExpr = parser.Request;
 const ArgList = parser.ArgList;
 
+const variable = @import("variable.zig");
+const Variable = variable.Variable;
+
 const repl = @import("repl.zig");
 const http = @import("http.zig");
 const file = @import("file.zig");
@@ -92,47 +95,6 @@ pub const UserInterface = union(enum) {
     }
 };
 
-const Variable = union(enum) {
-    boolean: bool,
-    int: i128,
-    float: f128,
-    string: String,
-    list: std.ArrayList(Variable),
-    map: std.StringHashMap(Variable),
-
-    pub fn fromBool(val: bool) Variable {
-        return Variable{ .boolean = val };
-    }
-
-    pub fn fromInt(comptime T: type, val: T) Variable {
-        switch (@typeInfo(T)) {
-            .int => {},
-            else => @compileError(@typeName(T) ++ " is not an integer type"),
-        }
-
-        return Variable{ .int = val };
-    }
-
-    pub fn fromStr(str: String, allocator: std.mem.Allocator) !Variable {
-        const owned = try strings.toOwned(str, allocator);
-        return Variable{ .string = owned };
-    }
-
-    pub fn deinit(self: *Variable, allocator: std.mem.Allocator) void {
-        switch (self.*) {
-            .boolean, .int, .float => {},
-            .string => |s| allocator.free(s),
-            .list => |*l| {
-                for (l.items) |*e| {
-                    e.deinit(allocator);
-                }
-                l.clearAndFree();
-            },
-            .map => |*m| m.deinit(),
-        }
-    }
-};
-
 const Context = struct {
     allocator: std.mem.Allocator,
 
@@ -191,9 +153,9 @@ const Context = struct {
             }
 
             if (strings.eql(part, "method") and spliterator.peek() == null)
-                return try Variable.fromStr(lr.method, self.allocator);
+                return try Variable.fromStr(lr.method.value, self.allocator);
             if (strings.eql(part, "url") and spliterator.peek() == null)
-                return try Variable.fromStr(lr.url, self.allocator);
+                return try Variable.fromStr(lr.url.value, self.allocator);
             if (strings.eql(part, "time_spent") and spliterator.peek() == null)
                 return Variable.fromInt(u64, lr.time_spent / std.time.ns_per_ms);
             if (strings.eql(part, "success") and spliterator.peek() == null)
@@ -209,14 +171,14 @@ const Context = struct {
         var buf: [1024]u8 = undefined;
         const msg = try switch (lr.response) {
             .failure => std.fmt.bufPrint(&buf, "{s} request to {s} failed: {s}: {s}", .{
-                lr.method,
-                lr.url,
+                lr.method.value,
+                lr.url.value,
                 lr.response.failure.reason,
                 @errorName(lr.response.failure.base_err),
             }),
             .success => std.fmt.bufPrint(&buf, "{s} request to {s} succeeded: {} - {s}", .{
-                lr.method,
-                lr.url,
+                lr.method.value,
+                lr.url.value,
                 lr.response.success.code,
                 std.http.Status.phrase(lr.response.success.code) orelse "Unknown",
             }),
@@ -269,7 +231,7 @@ fn doRequest(ctx: *Context, req: RequestExpr) !void {
         .failure => |err| {
             try ctx.ui.print(
                 "Error while executing {s} command: {s}: {s}\n",
-                .{ result.method, err.reason, @errorName(err.base_err) },
+                .{ result.method.value, err.reason, @errorName(err.base_err) },
             );
         },
         .success => |r| {
@@ -299,27 +261,21 @@ fn resolveArguments(ctx: *Context, args: ArgList) !String {
     var str_builder = StringBuilder.init(ctx.allocator);
     defer str_builder.clearAndFree();
 
-    f: for (args.items) |arg| {
+    for (args.items) |arg| {
         switch (arg) {
             .value => |v| try str_builder.appendSlice(v),
             .variable => |v| {
-                var variable = try ctx.resolveVariable(v);
-                if (variable == null) {
+                var val = try ctx.resolveReqVariable(v);
+                if (val == null) {
                     debug.println("{s} has null value", .{v});
-                    continue :f;
+                } else {
+                    defer val.?.deinit();
+
+                    const str_val = try val.?.toStrAlloc(ctx.allocator);
+                    defer ctx.allocator.free(str_val);
+
+                    try str_builder.appendSlice(str_val);
                 }
-                defer variable.?.deinit(ctx.allocator);
-
-                const v_str = try switch (variable.?) {
-                    .string => |s| strings.toOwned(s, ctx.allocator),
-                    inline .boolean, .int, .float => |x| std.fmt.allocPrint(ctx.allocator, "{}", .{x}),
-                    else => |t| std.fmt.allocPrint(ctx.allocator, "TODO: stringify {s}", .{
-                        @typeName(@TypeOf(t)),
-                    }),
-                };
-                defer ctx.allocator.free(v_str);
-
-                try str_builder.appendSlice(v_str);
             },
         }
     }

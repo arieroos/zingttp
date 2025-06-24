@@ -83,6 +83,7 @@ const test_alloc = std.testing.allocator;
 
 test AllocString {
     const test_str = "Some test string";
+
     var control: String = test_str[0..];
     var result_str: ?AllocString = null;
 
