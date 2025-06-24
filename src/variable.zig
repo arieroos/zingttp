@@ -112,6 +112,32 @@ pub const Variable = union(enum) {
         entry.value_ptr.* = val;
     }
 
+    pub fn copy(self: Self, allocator: Allocator) !Self {
+        return switch (self) {
+            .boolean, .int, .float => self,
+            .string => |s| Self.fromStr(s.value, allocator),
+            .list => |l| cpy: {
+                var n = try VariableList.initCapacity(allocator, l.items.len);
+                errdefer n.clearAndFree();
+
+                for (l.items) |item| {
+                    try n.append(try item.copy(allocator));
+                }
+                break :cpy Variable{ .list = n };
+            },
+            .map => |m| cpy: {
+                var n = Variable{ .map = VariableMap.init(allocator) };
+                errdefer n.deinit();
+
+                var mi = m.iterator();
+                while (mi.next()) |e| {
+                    try n.mapPut(e.key_ptr.*, e.value_ptr.*, allocator);
+                }
+                break :cpy n;
+            },
+        };
+    }
+
     pub fn deinit(self: *Self) void {
         switch (self.*) {
             .boolean, .int, .float => {},
@@ -159,6 +185,32 @@ fn stringifyList(l: VariableList, allocator: Allocator) Allocator.Error!String {
     try builder.appendSlice("\n]");
 
     return builder.toOwnedSlice();
+}
+
+pub fn resolveVariableFromPath(variable: Variable, path: String) ?Variable {
+    var spliterator = std.mem.splitScalar(u8, path, '.');
+
+    while (spliterator.peek()) |p| {
+        if (p.len > 0) {
+            break;
+        }
+        _ = spliterator.next();
+    }
+
+    if (spliterator.next()) |part| {
+        switch (variable) {
+            .boolean, .float, .int, .string => return null,
+            .list => |l| {
+                if (spliterator.peek()) |_| return null;
+                const idx = std.fmt.parseInt(usize, part, 10) catch return null;
+                return if (idx < l.items.len) l.items[idx] else null;
+            },
+            .map => |m| return if (m.get(part)) |p|
+                if (p) |pr| resolveVariableFromPath(pr, spliterator.rest()) else null
+            else
+                null,
+        }
+    } else return variable;
 }
 
 const expect = std.testing.expect;

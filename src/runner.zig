@@ -204,23 +204,12 @@ fn resolveHeaderVariable(
         defer allocator.free(lower_part);
 
         if (headers.map.get(lower_part)) |header| {
-            if (spliterator.next()) |idx_str| {
-                advanceSpliterator(&spliterator);
-                if (spliterator.peek() != null) {
-                    return null;
-                }
-                const idx = std.fmt.parseInt(usize, idx_str, 10) catch return null;
-                if (idx >= header.items.len) {
-                    return null;
-                }
-                return try Variable.fromStr(header.items[idx], allocator);
-            } else {
-                // TODO: find a way to represent the header values
-                return try Variable.fromStr("TODO req headers list", allocator);
-            }
-        } else {
-            return null;
-        }
+            var header_list = try Variable.fromArrayList(String, header.*, allocator);
+            defer header_list.deinit();
+
+            const found = variable.resolveVariableFromPath(header_list, spliterator.rest());
+            return if (found) |f| try f.copy(allocator) else null;
+        } else return null;
     }
     // TODO: find a way to represent all the headers and their values
     return try Variable.fromStr("TODO req headers full", allocator);
@@ -408,6 +397,7 @@ test "Context.resolveReqVariable resolves request variables" {
         .{ .key = "time_spent", .expected = "0" },
         .{ .key = "success", .expected = "true" },
 
+        .{ .key = "headers.Content-Type", .expected = "[\n\tapplication/json\n]" },
         .{ .key = "headers.Content-Type.0", .expected = "application/json" },
 
         .{ .key = "", .expected = "GET request to http://some_site.com succeeded: http.Status.ok - OK" },
