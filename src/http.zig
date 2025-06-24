@@ -191,18 +191,22 @@ pub const Client = struct {
             ErrReason.uri,
         );
 
-        debug.println("Opening connection to {s}", .{uri.host.?.percent_encoded});
+        const host = if (!debug.isActive()) "" else if (uri.host) |h| switch (h) {
+            .percent_encoded, .raw => |v| v,
+        } else "";
+
+        debug.println("Opening connection to {s}", .{host});
         var req = StdClient.open(&self.client, method, uri, .{
             .server_header_buffer = server_header_buf,
             .redirect_behavior = StdClient.Request.RedirectBehavior.unhandled,
         }) catch |err| return genErrResp(request, err, timer.read(), ErrReason.open);
         defer req.deinit();
 
-        debug.println("Sending data to {s}", .{uri.host.?.percent_encoded});
+        debug.println("Sending data to {s}", .{host});
         req.send() catch |err| return genErrResp(request, err, timer.read(), ErrReason.send);
         req.finish() catch |err| return genErrResp(request, err, timer.read(), ErrReason.finish);
 
-        debug.println("Waiting for reply from {s}", .{uri.host.?.percent_encoded});
+        debug.println("Waiting for reply from {s}", .{host});
         req.wait() catch |err| return genErrResp(request, err, timer.read(), ErrReason.wait);
 
         const header_map = scanHeaders(
@@ -245,11 +249,14 @@ pub const Client = struct {
 };
 
 fn genErrResp(request: *Request, err: anyerror, elapsed: u64, comptime reason: ErrReason) *Request {
+    const reason_str = ErrDescription(reason);
     request.response = .{ .failure = .{
         .base_err = err,
-        .reason = ErrDescription(reason),
+        .reason = reason_str,
     } };
     request.time_spent = elapsed;
+
+    debug.println("Request failed: {s}", .{reason_str});
     return request;
 }
 
@@ -334,6 +341,19 @@ test Client {
     var req = try Request.init("GET", "https://jsonplaceholder.typicode.com/posts/1", test_allocator);
     var result = test_client.do(&req, .{});
     defer result.deinit();
+}
+
+test "Client doesn't panic on invalid URL values" {
+    const test_values = [_]String{ "", "google.com", "http::/google.com" };
+
+    var test_client = client(test_allocator);
+    defer test_client.deinit();
+
+    inline for (test_values) |v| {
+        var req = try Request.init("GET", v, test_allocator);
+        var result = test_client.do(&req, .{});
+        defer result.deinit();
+    }
 }
 
 test "Request deinit works" {
