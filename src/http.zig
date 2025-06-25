@@ -1,4 +1,6 @@
 const std = @import("std");
+const assert = std.debug.assert;
+
 const http = std.http;
 const StdClient = http.Client;
 
@@ -118,6 +120,30 @@ pub const Response = union(enum) {
         body: StringBuilder,
         code: http.Status,
     },
+
+    pub fn reason(self: Response, buf: []u8) !String {
+        assert(buf.len >= 128);
+
+        return switch (self) {
+            .failure => |f| std.fmt.bufPrint(
+                buf,
+                "{s}: {s}",
+                .{ f.reason, @errorName(f.base_err) },
+            ),
+            .success => |s| std.fmt.bufPrint(
+                buf,
+                "{} ({s})",
+                .{ @intFromEnum(s.code), s.code.phrase() orelse "Unknown" },
+            ),
+        };
+    }
+
+    pub fn isSuccess(self: Response) bool {
+        return switch (self) {
+            .failure => false,
+            .success => |s| @intFromEnum(s.code) < 400,
+        };
+    }
 };
 
 pub const Request = struct {
@@ -139,6 +165,13 @@ pub const Request = struct {
             .method = try strings.AllocString.init(method, allocator),
             .url = try strings.AllocString.init(url, allocator),
             .headers = HeaderMap.init(allocator),
+        };
+    }
+
+    pub fn isSuccess(self: Request) bool {
+        return switch (self.response) {
+            .failure => false,
+            .success => true,
         };
     }
 

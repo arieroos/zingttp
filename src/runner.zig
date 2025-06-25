@@ -1,4 +1,5 @@
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 
 const strings = @import("strings.zig");
 const String = strings.String;
@@ -23,11 +24,11 @@ pub const line_size = 1024;
 const TestUi = struct {
     inputs: []const String,
     outputs: std.ArrayList(String),
-    allocator: std.mem.Allocator,
+    allocator: Allocator,
 
     input_idx: usize = 0,
 
-    fn init(lines: []const String, allocator: std.mem.Allocator) TestUi {
+    fn init(lines: []const String, allocator: Allocator) TestUi {
         return TestUi{
             .inputs = lines,
             .outputs = std.ArrayList(String).init(allocator),
@@ -96,120 +97,87 @@ pub const UserInterface = union(enum) {
 };
 
 const Context = struct {
-    allocator: std.mem.Allocator,
+    allocator: Allocator,
 
     client: http.Client,
     ui: *UserInterface,
 
-    last_req: ?http.Request = null,
+    variables: Variable,
+
     options: http.Options = .{},
     // TODO: A way to specify options
 
-    fn updateLastResponse(self: *Context, new: http.Request) void {
-        var old = self.last_req;
-        self.last_req = new;
-        if (old) |*o| o.deinit();
+    fn init(ui: *UserInterface, allocator: Allocator) Context {
+        return Context{
+            .allocator = allocator,
+            .client = http.client(allocator),
+            .ui = ui,
+            .variables = Variable.initMap(allocator),
+        };
+    }
+
+    fn updateLastResponse(self: *Context, new: http.Request) !void {
+        const req_var = try requestToVar(new, self.allocator);
+        try self.variables.mapPut("last_request", req_var, self.allocator);
     }
 
     fn deinit(self: *Context) void {
-        if (self.last_req) |*r| r.deinit();
+        self.variables.deinit();
         self.client.deinit();
     }
 
-    fn resolveVariable(self: *Context, key: String) !?Variable {
-        var spliterator = std.mem.splitScalar(u8, key, '.');
-
-        while (spliterator.next()) |part| {
-            if (part.len == 0) {
-                continue;
-            }
-            return if (strings.eql(part, "last_request"))
-                try self.resolveReqVariable(spliterator.rest())
-            else
-                null;
-        }
-
-        return null;
-    }
-
-    fn resolveReqVariable(self: *Context, key: String) !?Variable {
-        if (self.last_req == null) {
-            return null;
-        }
-        const lr = self.last_req.?;
-
-        var spliterator = std.mem.splitScalar(u8, key, '.');
-
-        while (spliterator.next()) |part| {
-            if (part.len == 0) {
-                continue;
-            }
-
-            advanceSpliterator(&spliterator);
-
-            if (strings.eql(part, "method") and spliterator.peek() == null)
-                return try Variable.fromStr(lr.method.value, self.allocator);
-            if (strings.eql(part, "url") and spliterator.peek() == null)
-                return try Variable.fromStr(lr.url.value, self.allocator);
-            if (strings.eql(part, "time_spent") and spliterator.peek() == null)
-                return Variable.fromInt(u64, lr.time_spent / std.time.ns_per_ms);
-            if (strings.eql(part, "success") and spliterator.peek() == null)
-                return Variable.fromBool(switch (lr.response) {
-                    .failure => false,
-                    .success => true,
-                });
-
-            if (strings.eql(part, "headers"))
-                return resolveHeaderVariable(self.last_req.?.headers, spliterator.rest(), self.allocator);
-
-            return null;
-        }
-
-        var buf: [1024]u8 = undefined;
-        const msg = try switch (lr.response) {
-            .failure => std.fmt.bufPrint(&buf, "{s} request to {s} failed: {s}: {s}", .{
-                lr.method.value,
-                lr.url.value,
-                lr.response.failure.reason,
-                @errorName(lr.response.failure.base_err),
-            }),
-            .success => std.fmt.bufPrint(&buf, "{s} request to {s} succeeded: {} - {s}", .{
-                lr.method.value,
-                lr.url.value,
-                lr.response.success.code,
-                std.http.Status.phrase(lr.response.success.code) orelse "Unknown",
-            }),
-        };
-        return try Variable.fromStr(msg, self.allocator);
+    fn resolveVariable(self: *Context, key: String) ?Variable {
+        return variable.resolveVariableFromPath(self.variables, key);
     }
 };
 
-fn resolveHeaderVariable(
-    headers: http.HeaderMap,
-    key: String,
-    allocator: std.mem.Allocator,
-) !?Variable {
-    var spliterator = std.mem.splitScalar(u8, key, '.');
+fn requestToVar(req: http.Request, allocator: Allocator) !Variable {
+    var map = Variable.initMap(allocator);
+    errdefer map.deinit();
 
-    while (spliterator.next()) |part| {
-        if (part.len == 0) {
-            continue;
-        }
-        advanceSpliterator(&spliterator);
+    try map.mapPutAny(String, "method", req.method.value, allocator);
+    try map.mapPutAny(String, "url", req.url.value, allocator);
+    try map.mapPutAny(u64, "time_spent", req.time_spent, allocator);
+    try map.mapPutAny(bool, "success", req.isSuccess(), allocator);
 
-        const lower_part = try std.ascii.allocLowerString(allocator, part);
-        defer allocator.free(lower_part);
+    try map.mapPut("headers", try headerMapToVar(req.headers, allocator), allocator);
 
-        if (headers.map.get(lower_part)) |header| {
-            var header_list = try Variable.fromArrayList(String, header.*, allocator);
-            defer header_list.deinit();
+    const resp = try responseToVar(req.response, allocator);
+    try map.mapPut("response", resp, allocator);
 
-            const found = variable.resolveVariableFromPath(header_list, spliterator.rest());
-            return if (found) |f| try f.copy(allocator) else null;
-        } else return null;
+    return map;
+}
+
+fn responseToVar(resp: http.Response, allocator: Allocator) !Variable {
+    var map = Variable.initMap(allocator);
+    errdefer map.deinit();
+
+    var buf: [256]u8 = undefined;
+    try map.mapPutAny(String, "reason", try resp.reason(&buf), allocator);
+    try map.mapPutAny(bool, "success", resp.isSuccess(), allocator);
+
+    switch (resp) {
+        .failure => {},
+        .success => |s| {
+            try map.mapPutAny(std.http.Status, "code", s.code, allocator);
+            try map.mapPutAny(String, "body", s.body.items, allocator);
+
+            try map.mapPut("headers", try headerMapToVar(s.headers, allocator), allocator);
+        },
     }
-    // TODO: find a way to represent all the headers and their values
-    return try Variable.fromStr("TODO req headers full", allocator);
+
+    return map;
+}
+
+fn headerMapToVar(header_map: http.HeaderMap, allocator: Allocator) !Variable {
+    var map = Variable.initMap(allocator);
+    errdefer map.deinit();
+
+    for (header_map.map.keys()) |key| {
+        const list = try Variable.fromArrayList(String, header_map.map.get(key).?.*, allocator);
+        try map.mapPut(key, list, allocator);
+    }
+    return map;
 }
 
 fn advanceSpliterator(s: *std.mem.SplitIterator(u8, std.mem.DelimiterType.scalar)) void {
@@ -221,8 +189,8 @@ fn advanceSpliterator(s: *std.mem.SplitIterator(u8, std.mem.DelimiterType.scalar
     }
 }
 
-pub fn run(ui: *UserInterface, allocator: std.mem.Allocator) !void {
-    var ctx = Context{ .allocator = allocator, .client = http.client(allocator), .ui = ui };
+pub fn run(ui: *UserInterface, allocator: Allocator) !void {
+    var ctx = Context.init(ui, allocator);
     defer ctx.deinit();
 
     var lineBuffer: [line_size]u8 = undefined;
@@ -234,6 +202,8 @@ pub fn run(ui: *UserInterface, allocator: std.mem.Allocator) !void {
             },
             else => return err,
         };
+        debug.println("Processing line: {s}", .{line});
+
         var tokens = try scanner.scan(line, allocator);
         defer tokens.deinit();
 
@@ -258,7 +228,7 @@ fn doRequest(ctx: *Context, req: RequestExpr) !void {
     defer ctx.allocator.free(url);
 
     var result = try http.Request.init(req.method, url, ctx.allocator);
-    errdefer result.deinit();
+    defer result.deinit();
 
     _ = ctx.client.do(&result, ctx.options);
     switch (result.response) {
@@ -277,7 +247,7 @@ fn doRequest(ctx: *Context, req: RequestExpr) !void {
             );
         },
     }
-    ctx.last_req = result;
+    try ctx.updateLastResponse(result);
 }
 
 fn doPrint(ctx: *Context, args: ArgList) !void {
@@ -299,12 +269,10 @@ fn resolveArguments(ctx: *Context, args: ArgList) !String {
         switch (arg) {
             .value => |v| try str_builder.appendSlice(v),
             .variable => |v| {
-                var val = try ctx.resolveVariable(v);
+                var val = ctx.resolveVariable(v);
                 if (val == null) {
                     debug.println("{s} has null value", .{v});
                 } else {
-                    defer val.?.deinit();
-
                     const str_val = try val.?.toStrAlloc(ctx.allocator);
                     defer ctx.allocator.free(str_val);
 
@@ -328,11 +296,7 @@ fn makeTestUi(inputs: []const String) UserInterface {
 
 fn makeTestCtx() Context {
     var test_ui = makeTestUi(&[_]String{});
-    return Context{
-        .allocator = test_alloc,
-        .client = http.client(test_alloc),
-        .ui = &test_ui,
-    };
+    return Context.init(&test_ui, test_alloc);
 }
 
 test run {
@@ -375,38 +339,48 @@ test "Context.updateLastResponse does not leak memory" {
     var ctx = makeTestCtx();
     errdefer ctx.deinit();
 
-    ctx.last_req = try makeTestResponse("Something nice and long, we want to to check for memory leaks.");
-    ctx.updateLastResponse(try makeTestResponse("Hi there!"));
+    var resp1 = try makeTestResponse("Something nice and long, we want to to check for memory leaks.");
+    try ctx.updateLastResponse(resp1);
 
+    var resp2 = try makeTestResponse("Hi there!");
+    try ctx.updateLastResponse(resp2);
+
+    resp1.deinit();
+    resp2.deinit();
     ctx.deinit();
     try expect(!std.testing.allocator_instance.detectLeaks());
 }
 
-test "Context.resolveReqVariable resolves request variables" {
+test "Context.resolveVariable resolves request variables" {
     var ctx = makeTestCtx();
     defer ctx.deinit();
 
-    ctx.last_req = try makeTestResponse("Some data in the reply");
+    var resp = try makeTestResponse("Some data in the reply");
+    defer resp.deinit();
+    try ctx.updateLastResponse(resp);
 
     const cases = [_]struct { key: String, expected: String }{
+        .{
+            .key = "",
+            .expected = "{\n\turl: http://some_site.com,\n\tsuccess: true,\n\tmethod: GET,\n\ttime_spent: 0,\n\theaders: {\n\t\tcontent-type: [\n\t\t\tapplication/json\n\t\t]\n\t},\n\tresponse: {\n\t\tsuccess: true,\n\t\treason: 200 (OK),\n\t\tbody: Some data in the reply,\n\t\theaders: {},\n\t\tcode: 200\n\t}\n}",
+        },
+
         .{ .key = "method", .expected = "GET" },
         .{ .key = "url", .expected = "http://some_site.com" },
         .{ .key = "time_spent", .expected = "0" },
         .{ .key = "success", .expected = "true" },
+        .{ .key = "headers", .expected = "{\n\tcontent-type: [\n\t\tapplication/json\n\t]\n}" },
 
-        .{ .key = "headers.Content-Type", .expected = "[\n\tapplication/json\n]" },
-        .{ .key = "headers.Content-Type.0", .expected = "application/json" },
-
-        .{ .key = "", .expected = "GET request to http://some_site.com succeeded: http.Status.ok - OK" },
+        .{ .key = "headers.content-type", .expected = "[\n\tapplication/json\n]" },
+        .{ .key = "headers.content-type.0", .expected = "application/json" },
     };
 
     inline for (&cases) |case| {
-        var var_val = try ctx.resolveReqVariable(case.key);
+        var var_val = ctx.resolveVariable("last_request." ++ case.key);
         if (var_val == null) {
             std.log.err("Unexpected null value for key {s}", .{case.key});
             try expect(false);
         }
-        defer var_val.?.deinit();
 
         const str = try var_val.?.toStrAlloc(test_alloc);
         defer test_alloc.free(str);
@@ -419,7 +393,10 @@ test "resolveArguments resolves arguments" {
     var ctx = makeTestCtx();
     defer ctx.deinit();
 
-    ctx.updateLastResponse(try makeTestResponse(""));
+    var resp = try makeTestResponse("");
+    defer resp.deinit();
+
+    try ctx.updateLastResponse(resp);
 
     const args = [_]parser.Argument{
         .{ .value = "Made" },
@@ -438,7 +415,7 @@ test "resolveArguments resolves arguments" {
     try expectEqualStrings("Made a GET Request", resolved);
 }
 
-fn makeTestUiFromFile(file_path: String, allocator: std.mem.Allocator) !UserInterface {
+fn makeTestUiFromFile(file_path: String, allocator: Allocator) !UserInterface {
     var test_file = try std.fs.cwd().openFile(file_path, .{ .lock = .shared });
     defer test_file.close();
     const file_reader = test_file.reader();
@@ -524,7 +501,7 @@ test "Run print file" {
         "",
         "",
         "Received response 200 (OK):",
-        "GET request to https://jsonplaceholder.typicode.com/posts/1 succeeded: http.Status.ok - OK",
+        "{\n\turl: https://jsonplaceholder.typicode.com/posts/1,\n",
         "GET",
         "GET",
         "GET",

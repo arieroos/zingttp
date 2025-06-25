@@ -3,6 +3,8 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Pointer = std.builtin.Type.Pointer;
 
+const debug = @import("debug.zig");
+
 const strings = @import("strings.zig");
 const String = strings.String;
 const StringBuilder = strings.StringBuilder;
@@ -33,10 +35,15 @@ pub const Variable = union(enum) {
                 @compileError(
                     @tagName(p.size) ++ " sized " ++ @typeName(p.child) ++ " pointers can't be converted to Variables",
                 ),
+            .@"enum" => |e| Self.fromInt(e.tag_type, @intFromEnum(val)),
             else => @compileError(
                 @typeName(T) ++ "(" ++ @tagName(type_info) ++ ")" ++ " can't be turned into a Variable",
             ),
         };
+    }
+
+    pub fn initMap(allocator: Allocator) Self {
+        return Self{ .map = VariableMap.init(allocator) };
     }
 
     pub fn fromBool(val: bool) Self {
@@ -80,6 +87,10 @@ pub const Variable = union(enum) {
     }
 
     pub fn toStrAlloc(self: Self, allocator: Allocator) !String {
+        return self.toStrAllocDepth(0, allocator);
+    }
+
+    pub fn toStrAllocDepth(self: Self, depth: usize, allocator: Allocator) !String {
         return switch (self) {
             inline .boolean, .int => |x| std.fmt.allocPrint(allocator, "{}", .{x}),
             .float => |f| blk: {
@@ -90,9 +101,20 @@ pub const Variable = union(enum) {
                     std.fmt.allocPrint(allocator, "{e}", .{f});
             },
             .string => |s| strings.toOwned(s.value, allocator),
-            .list => |l| try stringifyList(l, allocator),
-            else => std.fmt.allocPrint(allocator, "TODO: stringify {s}", .{@tagName(self)}),
+            .list => |l| try stringifyList(l, depth, allocator),
+            .map => |m| try stringifyMap(m, depth, allocator),
         };
+    }
+
+    pub fn mapPutAny(
+        self: *Self,
+        comptime T: type,
+        key: String,
+        val: T,
+        allocator: Allocator,
+    ) !void {
+        const v = try Self.init(T, val, allocator);
+        try self.mapPut(key, v, allocator);
     }
 
     pub fn mapPut(self: *Self, key: String, val: ?Variable, allocator: Allocator) !void {
@@ -161,7 +183,7 @@ pub const Variable = union(enum) {
     }
 };
 
-fn stringifyList(l: VariableList, allocator: Allocator) Allocator.Error!String {
+fn stringifyList(l: VariableList, depth: usize, allocator: Allocator) Allocator.Error!String {
     if (l.items.len == 0) {
         return try strings.toOwned("[]", allocator);
     }
@@ -171,18 +193,67 @@ fn stringifyList(l: VariableList, allocator: Allocator) Allocator.Error!String {
 
     try builder.appendSlice("[\n\t");
     for (l.items[0 .. l.items.len - 1]) |item| {
-        const str = try item.toStrAlloc(allocator);
+        for (0..depth) |_| {
+            try builder.append('\t');
+        }
+
+        const str = try item.toStrAllocDepth(depth + 1, allocator);
         defer allocator.free(str);
 
         try builder.appendSlice(str);
         try builder.appendSlice(",\n\t");
     }
+    for (0..depth) |_| {
+        try builder.append('\t');
+    }
     const lastItem = l.items[l.items.len - 1];
-    const str = try lastItem.toStrAlloc(allocator);
+    const str = try lastItem.toStrAllocDepth(depth + 1, allocator);
     defer allocator.free(str);
 
     try builder.appendSlice(str);
-    try builder.appendSlice("\n]");
+    try builder.append('\n');
+    for (0..depth) |_| {
+        try builder.append('\t');
+    }
+    try builder.append(']');
+
+    return builder.toOwnedSlice();
+}
+
+fn stringifyMap(m: VariableMap, depth: usize, allocator: Allocator) Allocator.Error!String {
+    const count = m.count();
+    if (count == 0) {
+        return try strings.toOwned("{}", allocator);
+    }
+
+    var builder = StringBuilder.init(allocator);
+    defer builder.clearAndFree();
+
+    try builder.appendSlice("{\n\t");
+
+    var it = m.iterator();
+    var idx: usize = 1;
+    while (it.next()) |e| : (idx += 1) {
+        for (0..depth) |_| {
+            try builder.append('\t');
+        }
+
+        try builder.appendSlice(e.key_ptr.*);
+        try builder.appendSlice(": ");
+
+        if (e.value_ptr.*) |v| {
+            const str = try v.toStrAllocDepth(depth + 1, allocator);
+            defer allocator.free(str);
+
+            try builder.appendSlice(str);
+        } else try builder.appendSlice("NULL");
+
+        try builder.appendSlice(if (idx < count) ",\n\t" else "\n");
+    }
+    for (0..depth) |_| {
+        try builder.append('\t');
+    }
+    try builder.append('}');
 
     return builder.toOwnedSlice();
 }
@@ -197,6 +268,7 @@ pub fn resolveVariableFromPath(variable: Variable, path: String) ?Variable {
         _ = spliterator.next();
     }
 
+    debug.println("Looking for variable at {s}", .{path});
     if (spliterator.next()) |part| {
         switch (variable) {
             .boolean, .float, .int, .string => return null,
@@ -292,12 +364,18 @@ test "Variable map put" {
 }
 
 test "Variable map deinit" {
-    var m = Variable{ .map = VariableMap.init(test_alloc) };
+    var m = Variable.initMap(test_alloc);
     errdefer m.deinit();
 
     try m.mapPut("some value", try Variable.fromStr("some value", test_alloc), test_alloc);
     try m.mapPut("some int", Variable.fromInt(isize, -9), test_alloc);
     try m.mapPut("nul", null, test_alloc);
+
+    var subMap = Variable.initMap(test_alloc);
+    errdefer subMap.deinit();
+    try subMap.mapPutAny(String, "nested", "deinit", test_alloc);
+
+    try m.mapPut("sub", subMap, test_alloc);
 
     m.deinit();
     try expect(!std.testing.allocator_instance.detectLeaks());
