@@ -1,3 +1,7 @@
 # zig
 .zig-cache
 zig-out
+
+# rg (ripgrep used for nvim searches)
+.rgignore
+
