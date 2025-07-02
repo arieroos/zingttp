@@ -4,6 +4,9 @@ const assert = std.debug.assert;
 const http = std.http;
 const StdClient = http.Client;
 
+const build_info = @import("build");
+const version = build_info.manifest.version;
+
 const debug = @import("debug.zig");
 
 const strings = @import("strings.zig");
@@ -42,6 +45,15 @@ pub const HeaderMap = struct {
         }
 
         return self.map.getEntry(owned_key).?;
+    }
+
+    pub fn putManyKeys(self: *HeaderMap, keys_and_values: []const []const String) !void {
+        for (keys_and_values) |kv| {
+            std.debug.assert(kv.len > 1);
+            for (kv[1..]) |v| {
+                try self.putSingle(kv[0], v);
+            }
+        }
     }
 
     pub fn putSingle(self: *HeaderMap, key: String, value: String) !void {
@@ -84,7 +96,6 @@ pub const HeaderMap = struct {
 
 const ErrReason = enum {
     timer,
-    url_alloc,
     header_alloc,
     uri,
     open,
@@ -98,7 +109,6 @@ const ErrReason = enum {
 pub fn ErrDescription(comptime reason: ErrReason) String {
     return comptime switch (reason) {
         .timer => "Failed to initialise timer",
-        .url_alloc => "Failed to allocate memory for storing the url",
         .header_alloc => "Could not allocate memory for storing headers",
         .uri => "Could not parse URI",
         .open => "Could not open connection",
@@ -221,19 +231,34 @@ pub const Client = struct {
             ErrReason.uri,
         );
 
-        const host = if (!debug.isActive()) "" else if (uri.host) |h| switch (h) {
-            .percent_encoded, .raw => |v| v,
-        } else "";
+        var host_buffer: [256]u8 = undefined;
+        const host = full_host(uri, &host_buffer) catch &host_buffer;
+        var ua_buffer: [32]u8 = undefined;
+        const ua = std.fmt.bufPrint(&ua_buffer, "ZingTTP/{s}", .{version}) catch &ua_buffer;
+
+        const req_std_headers = http.Client.Request.Headers{
+            .host = .{ .override = host },
+            .authorization = .omit,
+            .user_agent = .{ .override = ua },
+            .connection = .omit,
+            .accept_encoding = .{ .override = "gzip, deflate" },
+        };
 
         debug.println("Opening connection to {s}", .{host});
         var req = StdClient.open(&self.client, method, uri, .{
             .server_header_buffer = server_header_buf,
             .redirect_behavior = StdClient.Request.RedirectBehavior.unhandled,
+            .headers = req_std_headers,
         }) catch |err| return genErrResp(request, err, timer.read(), ErrReason.open);
         defer req.deinit();
 
         debug.println("Sending data to {s}", .{host});
         req.send() catch |err| return genErrResp(request, err, timer.read(), ErrReason.send);
+        request.headers.putManyKeys(&[_][]const String{
+            &[_]String{ "host", req_std_headers.host.override },
+            &[_]String{ "user-agent", req_std_headers.user_agent.override },
+            &[_]String{ "accept-encoding", req_std_headers.accept_encoding.override },
+        }) catch |err| return genErrResp(request, err, timer.read(), ErrReason.header_alloc);
         req.finish() catch |err| return genErrResp(request, err, timer.read(), ErrReason.finish);
 
         debug.println("Waiting for reply from {s}", .{host});
@@ -286,6 +311,20 @@ fn genErrResp(request: *Request, err: anyerror, elapsed: u64, comptime reason: E
     request.time_spent = elapsed;
 
     debug.println("Request failed: {s}", .{reason_str});
+}
+
+fn full_host(uri: std.Uri, buffer: []u8) ![]u8 {
+    var stream = std.io.fixedBufferStream(buffer);
+    if (uri.host) |h| {
+        const h_str = switch (h) {
+            inline else => |v| v,
+        };
+        try std.fmt.format(stream.writer(), "{s}", .{h_str});
+    }
+    if (uri.port) |p| {
+        try std.fmt.format(stream.writer(), ":{}", .{p});
+    }
+    return stream.getWritten();
 }
 
 fn scanHeaders(header_buf: String, allocator: std.mem.Allocator) !HeaderMap {
@@ -366,10 +405,12 @@ test Client {
     var test_client = client(test_allocator);
     defer test_client.deinit();
 
-    var req = try Request.init("GET", "https://jsonplaceholder.typicode.com/posts/1", test_allocator);
+    var req = try Request.init("GET", "http://localhost:9009", test_allocator);
     defer req.deinit();
 
     test_client.do(&req, .{});
+
+    try expectEqualStrings("localhost:9009", req.headers.map.get("host").?.items[0]);
 }
 
 test "Client doesn't panic on invalid URL values" {
