@@ -264,10 +264,16 @@ pub const Client = struct {
         debug.println("Waiting for reply from {s}", .{host});
         req.wait() catch |err| return genErrResp(request, err, timer.read(), ErrReason.wait);
 
-        const header_map = scanHeaders(
-            server_header_buf,
-            self.allocator,
-        ) catch |err| return genErrResp(request, err, timer.read(), ErrReason.header_scan);
+        var resp_headers = HeaderMap.init(self.allocator);
+        var header_it = req.response.iterateHeaders();
+        while (header_it.next()) |h| {
+            resp_headers.putSingle(h.name, h.value) catch |err| return genErrResp(
+                request,
+                err,
+                timer.read(),
+                ErrReason.header_scan,
+            );
+        }
 
         var response_body = StringBuilder.init(self.allocator);
         const max = options.max_response_mem_mb * 1024;
@@ -282,7 +288,7 @@ pub const Client = struct {
         );
 
         request.response = .{ .success = .{
-            .headers = header_map,
+            .headers = resp_headers,
             .body = response_body,
             .code = req.response.status,
         } };
@@ -325,59 +331,6 @@ fn full_host(uri: std.Uri, buffer: []u8) ![]u8 {
         try std.fmt.format(stream.writer(), ":{}", .{p});
     }
     return stream.getWritten();
-}
-
-fn scanHeaders(header_buf: String, allocator: std.mem.Allocator) !HeaderMap {
-    var header_map = HeaderMap.init(allocator);
-
-    var lines = std.mem.splitSequence(u8, header_buf, "\r\n");
-    _ = lines.next(); // The first line is the HTTP Status
-    while (lines.next()) |line| {
-        if (line.len == 0) {
-            break;
-        }
-
-        var splits = std.mem.splitSequence(u8, line, ": ");
-        const header_name = splits.first();
-        const header_values = splits.rest();
-
-        if (strings.iEql(header_name, "Set-Cookie")) {
-            try header_map.putSingle(header_name, header_values);
-        }
-
-        var start: usize = 0;
-        var quoted = false;
-        for (header_values, 0..) |c, i| {
-            if (c == ',' and !quoted) {
-                const header_value = cleanHeaderVal(header_values[start..i]);
-                if (header_value.len > 0) try header_map.putSingle(header_name, header_value);
-                start = i + 1;
-            }
-            if (c == '"')
-                quoted = !quoted and std.mem.containsAtLeastScalar(
-                    u8,
-                    header_values[i + 1 ..],
-                    1,
-                    '"',
-                );
-        }
-        const header_value = cleanHeaderVal(header_values[start..]);
-        if (header_value.len > 0) try header_map.putSingle(header_name, header_value);
-    }
-
-    return header_map;
-}
-
-fn cleanHeaderVal(h: String) String {
-    var done = false;
-    var p = h;
-    while (!done) {
-        const n = strings.trimWhitespace(
-            if (p[0] == '"' and p[p.len - 1] == '"') p[1 .. p.len - 1] else p,
-        );
-        if (!strings.eql(n, p)) p = n else done = true;
-    }
-    return p;
 }
 
 const expect = std.testing.expect;
@@ -445,34 +398,4 @@ test "Request deinit works" {
 
     req.deinit();
     try expect(!std.testing.allocator_instance.detectLeaks());
-}
-
-test "scanHeaders scans headers" {
-    const header_str = "HTTP/1.1 201 Created\r\n" ++
-        "Content-Type: application/json\r\n" ++
-        "Location: http://example.com/users/123\r\n" ++
-        "X-Custom: Value 1\r\n" ++
-        "x-custom: Value 2\r\n" ++
-        "X-Comma-Separated: Value 1, Value 2, \"Value 3,4 and 5\"\r\n" ++
-        "\r\n";
-
-    var buf: [1024]u8 = undefined;
-    std.mem.copyForwards(u8, &buf, header_str);
-
-    var headers = try scanHeaders(&buf, test_allocator);
-    defer headers.deinit();
-
-    try expectEqualStrings("application/json", headers.getValue("Content-Type", 0).?);
-    try expect(headers.getValues("Content-Type").?.len == 1);
-    try expectEqualStrings("http://example.com/users/123", headers.getValue("Location", 0).?);
-    try expect(headers.getValues("Location").?.len == 1);
-
-    try expectEqualStrings("Value 1", headers.getValue("X-Custom", 0).?);
-    try expectEqualStrings("Value 2", headers.getValue("X-Custom", 1).?);
-    try expect(headers.getValues("X-Custom").?.len == 2);
-
-    try expectEqualStrings("Value 1", headers.getValue("X-Comma-Separated", 0).?);
-    try expectEqualStrings("Value 2", headers.getValue("X-Comma-Separated", 1).?);
-    try expectEqualStrings("Value 3,4 and 5", headers.getValue("X-Comma-Separated", 2).?);
-    try expect(headers.getValues("X-Comma-Separated").?.len == 3);
 }
