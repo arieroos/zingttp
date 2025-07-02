@@ -197,7 +197,7 @@ pub const Client = struct {
     client: StdClient,
     allocator: std.mem.Allocator,
 
-    pub fn do(self: *Client, request: *Request, options: Options) *Request {
+    pub fn do(self: *Client, request: *Request, options: Options) void {
         debug.println("Initiating {s} request to {s}", .{ request.method, request.url });
 
         var timer = std.time.Timer.start() catch |err| return genErrResp(
@@ -270,7 +270,6 @@ pub const Client = struct {
                 .{ request.method, request.url, time_str },
             );
         }
-        return request;
     }
 
     pub fn deinit(self: *Client) void {
@@ -278,7 +277,7 @@ pub const Client = struct {
     }
 };
 
-fn genErrResp(request: *Request, err: anyerror, elapsed: u64, comptime reason: ErrReason) *Request {
+fn genErrResp(request: *Request, err: anyerror, elapsed: u64, comptime reason: ErrReason) void {
     const reason_str = ErrDescription(reason);
     request.response = .{ .failure = .{
         .base_err = err,
@@ -287,7 +286,6 @@ fn genErrResp(request: *Request, err: anyerror, elapsed: u64, comptime reason: E
     request.time_spent = elapsed;
 
     debug.println("Request failed: {s}", .{reason_str});
-    return request;
 }
 
 fn scanHeaders(header_buf: String, allocator: std.mem.Allocator) !HeaderMap {
@@ -369,8 +367,9 @@ test Client {
     defer test_client.deinit();
 
     var req = try Request.init("GET", "https://jsonplaceholder.typicode.com/posts/1", test_allocator);
-    var result = test_client.do(&req, .{});
-    defer result.deinit();
+    defer req.deinit();
+
+    test_client.do(&req, .{});
 }
 
 test "Client doesn't panic on invalid URL values" {
@@ -381,8 +380,9 @@ test "Client doesn't panic on invalid URL values" {
 
     inline for (test_values) |v| {
         var req = try Request.init("GET", v, test_allocator);
-        var result = test_client.do(&req, .{});
-        defer result.deinit();
+        defer req.deinit();
+
+        test_client.do(&req, .{});
     }
 }
 

@@ -230,7 +230,7 @@ fn doRequest(ctx: *Context, req: RequestExpr) !void {
     var result = try http.Request.init(req.method, url, ctx.allocator);
     defer result.deinit();
 
-    _ = ctx.client.do(&result, ctx.options);
+    ctx.client.do(&result, ctx.options);
     switch (result.response) {
         .failure => |err| {
             try ctx.ui.print(
