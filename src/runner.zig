@@ -135,8 +135,8 @@ fn requestToVar(req: http.Request, allocator: Allocator) !Variable {
     var map = Variable.initMap(allocator);
     errdefer map.deinit();
 
-    try map.mapPutAny(String, "method", req.method.value, allocator);
-    try map.mapPutAny(String, "url", req.url.value, allocator);
+    try map.mapPutAny(String, "method", req.method, allocator);
+    try map.mapPutAny(String, "url", req.url, allocator);
     try map.mapPutAny(u64, "time_spent", req.time_spent, allocator);
     try map.mapPutAny(bool, "success", req.isSuccess(), allocator);
 
@@ -235,7 +235,7 @@ fn doRequest(ctx: *Context, req: RequestExpr) !void {
         .failure => |err| {
             try ctx.ui.print(
                 "Error while executing {s} command: {s}: {s}\n",
-                .{ result.method.value, err.reason, @errorName(err.base_err) },
+                .{ result.method, err.reason, @errorName(err.base_err) },
             );
         },
         .success => |r| {

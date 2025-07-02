@@ -149,8 +149,8 @@ pub const Response = union(enum) {
 pub const Request = struct {
     allocator: std.mem.Allocator,
 
-    method: strings.AllocString,
-    url: strings.AllocString,
+    method: String,
+    url: String,
     headers: HeaderMap,
 
     response: Response = .{ .failure = .{
@@ -162,8 +162,8 @@ pub const Request = struct {
     pub fn init(method: String, url: String, allocator: std.mem.Allocator) !Request {
         return Request{
             .allocator = allocator,
-            .method = try strings.AllocString.init(method, allocator),
-            .url = try strings.AllocString.init(url, allocator),
+            .method = method,
+            .url = url,
             .headers = HeaderMap.init(allocator),
         };
     }
@@ -176,9 +176,6 @@ pub const Request = struct {
     }
 
     pub fn deinit(self: *Request) void {
-        self.method.deinit();
-        self.url.deinit();
-
         self.headers.deinit();
 
         switch (self.response) {
@@ -201,7 +198,7 @@ pub const Client = struct {
     allocator: std.mem.Allocator,
 
     pub fn do(self: *Client, request: *Request, options: Options) *Request {
-        debug.println("Initiating {s} request to {s}", .{ request.method.value, request.url.value });
+        debug.println("Initiating {s} request to {s}", .{ request.method, request.url });
 
         var timer = std.time.Timer.start() catch |err| return genErrResp(
             request,
@@ -216,8 +213,8 @@ pub const Client = struct {
         ) catch |err| return genErrResp(request, err, timer.read(), ErrReason.header_alloc);
         defer self.allocator.free(server_header_buf);
 
-        const method: http.Method = @enumFromInt(http.Method.parse(request.method.value));
-        const uri = std.Uri.parse(request.url.value) catch |err| return genErrResp(
+        const method: http.Method = @enumFromInt(http.Method.parse(request.method));
+        const uri = std.Uri.parse(request.url) catch |err| return genErrResp(
             request,
             err,
             timer.read(),
@@ -270,7 +267,7 @@ pub const Client = struct {
             const time_str = std.fmt.fmtDuration(request.time_spent);
             debug.println(
                 "Finsihed {s} request to {s} in {s}",
-                .{ request.method.value, request.url.value, time_str },
+                .{ request.method, request.url, time_str },
             );
         }
         return request;
