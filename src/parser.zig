@@ -366,6 +366,36 @@ test "parseArgs parses args" {
     try expect(args_buffer[1].items.len == 1);
 }
 
+test "parseArgs can do invalids" {
+    const cases = &[_]TokenList{
+        try genTestTokenList(&[_]Token{
+            Token{ .value = "some value" },
+        }),
+        try genTestTokenList(&[_]Token{
+            Token{ .value = "some value" },
+            Token{ .keyword = Keyword.SET },
+        }),
+        try genTestTokenList(&[_]Token{
+            Token{ .value = "some value" },
+            Token{ .whitespace = 2 },
+            Token{ .variable = "some variable" },
+        }),
+    };
+
+    inline for (cases) |tokens| {
+        defer tokens.deinit();
+
+        var args_buffer: [2]ArgList = undefined;
+        const args = try parseArgs(tokens.items, &args_buffer, test_allocator);
+        defer for (0..args.arg_count) |i| {
+            args_buffer[i].clearAndFree();
+        };
+
+        try expect(args.invalid != null);
+        test_allocator.free(args.invalid.?.invalid);
+    }
+}
+
 test "genInvalidExpression Generate Invalid Expresion For Unexpected Token" {
     const msg = genInvalidExpression(
         InvalidReason.UnexpectedToken,
