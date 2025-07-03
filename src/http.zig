@@ -120,16 +120,18 @@ pub fn ErrDescription(comptime reason: ErrReason) String {
     };
 }
 
+const SuccessResponse = struct {
+    headers: HeaderMap,
+    body: StringBuilder,
+    code: http.Status,
+};
+
 pub const Response = union(enum) {
     failure: struct {
         base_err: anyerror,
         reason: String,
     },
-    success: struct {
-        headers: HeaderMap,
-        body: StringBuilder,
-        code: http.Status,
-    },
+    success: SuccessResponse,
 
     pub fn reason(self: Response, buf: []u8) !String {
         assert(buf.len >= 128);
@@ -176,6 +178,15 @@ pub const Request = struct {
             .url = url,
             .headers = HeaderMap.init(allocator),
         };
+    }
+
+    pub fn initResponse(self: *Request, code: http.Status) *SuccessResponse {
+        self.response = Response{ .success = .{
+            .body = StringBuilder.init(self.allocator),
+            .headers = HeaderMap.init(self.allocator),
+            .code = code,
+        } };
+        return &self.response.success;
     }
 
     pub fn isSuccess(self: Request) bool {
@@ -264,10 +275,10 @@ pub const Client = struct {
         debug.println("Waiting for reply from {s}", .{host});
         req.wait() catch |err| return genErrResp(request, err, timer.read(), ErrReason.wait);
 
-        var resp_headers = HeaderMap.init(self.allocator);
+        var response = request.initResponse(req.response.status);
         var header_it = req.response.iterateHeaders();
         while (header_it.next()) |h| {
-            resp_headers.putSingle(h.name, h.value) catch |err| return genErrResp(
+            response.headers.putSingle(h.name, h.value) catch |err| return genErrResp(
                 request,
                 err,
                 timer.read(),
@@ -275,24 +286,16 @@ pub const Client = struct {
             );
         }
 
-        var response_body = StringBuilder.init(self.allocator);
         const max = options.max_response_mem_mb * 1024;
         debug.println("Reading up to {} bytes from response", .{max});
         // TODO: Find a way to handle large responses, by maybe writing them to a file.
 
-        req.reader().readAllArrayList(&response_body, max) catch |err| return genErrResp(
+        req.reader().readAllArrayList(&response.body, max) catch |err| return genErrResp(
             request,
             err,
             timer.read(),
             ErrReason.read,
         );
-
-        request.response = .{ .success = .{
-            .headers = resp_headers,
-            .body = response_body,
-            .code = req.response.status,
-        } };
-        request.time_spent = timer.read();
 
         if (debug.isActive()) {
             const time_str = std.fmt.fmtDuration(request.time_spent);

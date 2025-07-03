@@ -98,6 +98,7 @@ pub const UserInterface = union(enum) {
 
 const Context = struct {
     allocator: Allocator,
+    arena: std.heap.ArenaAllocator,
 
     client: http.Client,
     ui: *UserInterface,
@@ -110,6 +111,7 @@ const Context = struct {
     fn init(ui: *UserInterface, allocator: Allocator) Context {
         return Context{
             .allocator = allocator,
+            .arena = std.heap.ArenaAllocator.init(allocator),
             .client = http.client(allocator),
             .ui = ui,
             .variables = Variable.initMap(allocator),
@@ -117,11 +119,14 @@ const Context = struct {
     }
 
     fn updateLastResponse(self: *Context, new: http.Request) !void {
+        debug.println0("Updating last request variable");
+
         const req_var = try requestToVar(new, self.allocator);
         try self.variables.mapPut("last_request", req_var, self.allocator);
     }
 
     fn deinit(self: *Context) void {
+        self.arena.deinit();
         self.variables.deinit();
         self.client.deinit();
     }
@@ -180,21 +185,15 @@ fn headerMapToVar(header_map: http.HeaderMap, allocator: Allocator) !Variable {
     return map;
 }
 
-fn advanceSpliterator(s: *std.mem.SplitIterator(u8, std.mem.DelimiterType.scalar)) void {
-    while (s.peek()) |p| {
-        if (p.len > 0) {
-            break;
-        }
-        _ = s.next();
-    }
-}
-
 pub fn run(ui: *UserInterface, allocator: Allocator) !void {
     var ctx = Context.init(ui, allocator);
     defer ctx.deinit();
 
+    const arena_alloc = ctx.arena.allocator();
     var lineBuffer: [line_size]u8 = undefined;
     while (true) {
+        _ = ctx.arena.reset(.retain_capacity);
+
         const line = ui.getNextLine(&lineBuffer) catch |err| switch (err) {
             error.EndOfFile => {
                 ui.exit();
@@ -204,11 +203,8 @@ pub fn run(ui: *UserInterface, allocator: Allocator) !void {
         };
         debug.println("Processing line: {s}", .{line});
 
-        var tokens = try scanner.scan(line, allocator);
-        defer tokens.deinit();
-
-        var expression = try parser.parse(tokens, allocator);
-        defer expression.deinit(allocator);
+        const tokens = try scanner.scan(line, arena_alloc);
+        const expression = try parser.parse(tokens, arena_alloc);
 
         switch (expression) {
             .nothing => continue,
@@ -225,9 +221,8 @@ pub fn run(ui: *UserInterface, allocator: Allocator) !void {
 
 fn doRequest(ctx: *Context, req: RequestExpr) !void {
     const url = try resolveArguments(ctx, req.arguments);
-    defer ctx.allocator.free(url);
 
-    var result = try http.Request.init(req.method, url, ctx.allocator);
+    var result = try http.Request.init(req.method, url, ctx.arena.allocator());
     defer result.deinit();
 
     ctx.client.do(&result, ctx.options);
@@ -252,8 +247,6 @@ fn doRequest(ctx: *Context, req: RequestExpr) !void {
 
 fn doPrint(ctx: *Context, args: ArgList) !void {
     const to_print = try resolveArguments(ctx, args);
-    defer ctx.allocator.free(to_print);
-
     try ctx.ui.print("{s}\n", .{to_print});
 }
 
@@ -261,10 +254,9 @@ fn resolveArguments(ctx: *Context, args: ArgList) !String {
     if (args.items.len == 0) {
         return "";
     }
+    const allocator = ctx.arena.allocator();
 
-    var str_builder = StringBuilder.init(ctx.allocator);
-    defer str_builder.clearAndFree();
-
+    var str_builder = StringBuilder.init(allocator);
     for (args.items) |arg| {
         switch (arg) {
             .value => |v| try str_builder.appendSlice(v),
@@ -273,16 +265,14 @@ fn resolveArguments(ctx: *Context, args: ArgList) !String {
                 if (val == null) {
                     debug.println("{s} has null value", .{v});
                 } else {
-                    const str_val = try val.?.toStrAlloc(ctx.allocator);
-                    defer ctx.allocator.free(str_val);
-
+                    const str_val = try val.?.toStrAlloc(allocator);
                     try str_builder.appendSlice(str_val);
                 }
             },
         }
     }
 
-    return try str_builder.toOwnedSlice();
+    return str_builder.items;
 }
 
 const test_alloc = std.testing.allocator;
@@ -410,7 +400,6 @@ test "resolveArguments resolves arguments" {
     arg_list.appendSliceAssumeCapacity(&args);
 
     const resolved = try resolveArguments(&ctx, arg_list);
-    defer test_alloc.free(resolved);
 
     try expectEqualStrings("Made a GET Request", resolved);
 }
