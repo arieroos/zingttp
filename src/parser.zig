@@ -1,9 +1,10 @@
 const std = @import("std");
-const scanner = @import("scanner.zig");
+const Allocator = std.mem.Allocator;
 
 const strings = @import("strings.zig");
 const String = strings.String;
 
+const scanner = @import("scanner.zig");
 const Keyword = scanner.Keyword;
 const Token = scanner.Token;
 const TokenInfo = scanner.TokenInfo;
@@ -28,7 +29,7 @@ pub const Expression = union(enum) {
     print: ArgList,
     invalid: String,
 
-    pub fn deinit(self: *Expression, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *Expression, allocator: Allocator) void {
         switch (self.*) {
             .request => |*r| r.arguments.clearAndFree(),
             .print => |*p| p.clearAndFree(),
@@ -65,7 +66,7 @@ fn InvalidArgs(comptime reason: InvalidReason) type {
     };
 }
 
-pub fn parse(tokenList: TokenList, allocator: std.mem.Allocator) !Expression {
+pub fn parse(tokenList: TokenList, allocator: Allocator) !Expression {
     const tokens = tokenList.items;
     if (tokens.len < 1) {
         return Expression.nothing;
@@ -76,47 +77,10 @@ pub fn parse(tokenList: TokenList, allocator: std.mem.Allocator) !Expression {
         else => return genInvalidExpression(InvalidReason.ShouldStartWithKeyword, .{}, allocator),
     };
 
-    if (keyword == Keyword.EXIT) {
-        if (tokens.len > 1) {
-            return genInvalidExpression(
-                InvalidReason.UnexpectedToken,
-                .{
-                    .pos = tokens[1].pos,
-                    .lexeme = tokens[1].lexeme,
-                },
-                allocator,
-            );
-        }
-        return Expression.exit;
-    }
-
-    if (tokens.len > 1) {
-        switch (tokens[1].token) {
-            .whitespace => {},
-            else => return genInvalidExpression(
-                InvalidReason.ExpectedOther,
-                .{
-                    .expected = "whitespace",
-                    .found = @tagName(tokens[1].token),
-                    .pos = tokens[1].pos,
-                    .lexeme = tokens[1].lexeme,
-                },
-                allocator,
-            ),
-        }
-    }
-
-    const args = if (tokens.len > 2)
-        try parseArgs(tokens[2..], allocator)
-    else
-        GetArgResult{ .args = ArgList.init(allocator) };
-
-    switch (args) {
-        .invalid => |i| return i,
-        else => {},
-    }
-
+    const arguments = tokens[1..];
     return switch (keyword) {
+        .EXIT => parseExit(arguments, allocator),
+        .PRINT => parsePrint(arguments, allocator),
         .GET,
         .POST,
         .PUT,
@@ -125,18 +89,7 @@ pub fn parse(tokenList: TokenList, allocator: std.mem.Allocator) !Expression {
         .OPTIONS,
         .TRACE,
         .CONNECT,
-        => if (args.args.items.len > 0)
-            Expression{ .request = .{ .method = @tagName(keyword), .arguments = args.args } }
-        else
-            genInvalidExpression(
-                InvalidReason.MissingToken,
-                .{
-                    .expected = "value or variable",
-                    .pos = tokens[0].pos + tokens[0].lexeme.len,
-                },
-                allocator,
-            ),
-        .PRINT => Expression{ .print = args.args },
+        => parseMethod(tokens[0], arguments, allocator),
         else => genInvalidExpression(
             InvalidReason.UnexpectedToken,
             .{
@@ -148,42 +101,117 @@ pub fn parse(tokenList: TokenList, allocator: std.mem.Allocator) !Expression {
     };
 }
 
-const GetArgResult = union(enum) {
-    invalid: Expression,
-    args: ArgList,
+fn parseExit(arguments: []TokenInfo, allocator: Allocator) Expression {
+    if (arguments.len > 0) {
+        return genInvalidExpression(
+            InvalidReason.UnexpectedToken,
+            .{
+                .pos = arguments[0].pos,
+                .lexeme = arguments[0].lexeme,
+            },
+            allocator,
+        );
+    }
+    return Expression.exit;
+}
+
+fn parsePrint(arguments: []TokenInfo, allocator: Allocator) !Expression {
+    var arg_buffer: [1]ArgList = undefined;
+    const args = try parseArgs(arguments, &arg_buffer, allocator);
+    if (args.invalid) |i| {
+        for (arg_buffer[0..args.arg_count]) |*a| {
+            a.clearAndFree();
+        }
+        return i;
+    }
+
+    return Expression{ .print = arg_buffer[0] };
+}
+
+fn parseMethod(token: TokenInfo, arguments: []TokenInfo, allocator: Allocator) !Expression {
+    var arg_buffer: [1]ArgList = undefined;
+    const args = try parseArgs(arguments, &arg_buffer, allocator);
+    if (args.invalid) |i| {
+        for (arg_buffer[0..args.arg_count]) |*a| {
+            a.clearAndFree();
+        }
+        return i;
+    }
+
+    return if (args.arg_count == 1 and arg_buffer[0].items.len > 0)
+        Expression{ .request = .{
+            .method = @tagName(token.token.keyword),
+            .arguments = arg_buffer[0],
+        } }
+    else
+        genInvalidExpression(
+            InvalidReason.MissingToken,
+            .{
+                .expected = "value or variable",
+                .pos = token.pos + token.lexeme.len,
+            },
+            allocator,
+        );
+}
+
+const GetArgResult = struct {
+    invalid: ?Expression = null,
+    arg_count: usize,
+
+    fn initInvalid(count: usize, token: TokenInfo, allocator: Allocator) GetArgResult {
+        return GetArgResult{
+            .invalid = genInvalidExpression(
+                InvalidReason.ExpectedOther,
+                .{
+                    .expected = "value or variable",
+                    .found = @tagName(token.token),
+                    .pos = token.pos,
+                    .lexeme = token.lexeme,
+                },
+                allocator,
+            ),
+            .arg_count = count,
+        };
+    }
 };
 
-fn parseArgs(tokens: []TokenInfo, allocator: std.mem.Allocator) !GetArgResult {
-    var args = ArgList.init(allocator);
-    errdefer args.clearAndFree();
+fn parseArgs(tokens: []TokenInfo, arg_buffer: []ArgList, allocator: Allocator) !GetArgResult {
+    if (tokens.len == 0) {
+        return GetArgResult{ .arg_count = 0 };
+    }
+    switch (tokens[0].token) {
+        .whitespace => {},
+        else => return GetArgResult.initInvalid(0, tokens[0], allocator),
+    }
+    arg_buffer[0] = ArgList.init(allocator);
 
-    for (tokens) |token| {
+    const max_args = arg_buffer.len;
+    var idx: usize = 0;
+    for (tokens[1..]) |token| {
         switch (token.token) {
-            .value => |v| try args.append(Argument{ .value = v }),
-            .variable => |v| try args.append(Argument{ .variable = v }),
+            .whitespace => {
+                idx += 1;
+                if (idx == max_args)
+                    return GetArgResult.initInvalid(idx, token, allocator);
+
+                std.debug.assert(idx < max_args);
+                arg_buffer[idx] = ArgList.init(allocator);
+            },
+            .value => |v| try arg_buffer[idx].append(Argument{ .value = v }),
+            .variable => |v| try arg_buffer[idx].append(Argument{ .variable = v }),
             else => {
-                defer args.clearAndFree();
-                return GetArgResult{ .invalid = genInvalidExpression(
-                    InvalidReason.ExpectedOther,
-                    .{
-                        .expected = "value or variable",
-                        .found = @tagName(token.token),
-                        .pos = token.pos,
-                        .lexeme = token.lexeme,
-                    },
-                    allocator,
-                ) };
+                return GetArgResult.initInvalid(idx + 1, token, allocator);
             },
         }
     }
 
-    return GetArgResult{ .args = args };
+    return GetArgResult{ .arg_count = idx + 1 };
 }
 
 fn genInvalidExpression(
     comptime reason: InvalidReason,
     args: InvalidArgs(reason),
-    allocator: std.mem.Allocator,
+    allocator: Allocator,
 ) Expression {
     const format = comptime switch (reason) {
         .ShouldStartWithKeyword => "Statement does not start with keyword",
@@ -312,52 +340,30 @@ test "parse breaks on command without arg" {
 
 test "parseArgs parses args" {
     var tokens = try genTestTokenList(&[_]Token{
+        Token{ .whitespace = 1 },
         Token{ .value = "PUT" },
         Token{ .value = "some value" },
-        Token{ .variable = "a.variable" },
-        Token{ .variable = "PUT" },
-    });
-    defer tokens.deinit();
-
-    var args = try parseArgs(tokens.items, test_allocator);
-    switch (args) {
-        .invalid => |i| {
-            defer test_allocator.free(i.invalid);
-            std.log.err("Unexpected invalid arg: {s}", .{i.invalid});
-            try expect(false);
-        },
-        .args => |*a| {
-            defer a.clearAndFree();
-            try expect(a.items.len == tokens.items.len);
-        },
-    }
-}
-
-test "parseArgs breaks on non-args" {
-    var tokens = try genTestTokenList(&[_]Token{
-        Token{ .value = "PUT" },
-        Token{ .value = "some value" },
-        Token{ .variable = "a.variable" },
         Token{ .whitespace = 2 },
+        Token{ .variable = "a.variable" },
     });
     defer tokens.deinit();
 
-    var args = try parseArgs(tokens.items, test_allocator);
-    switch (args) {
-        .invalid => |i| {
-            defer test_allocator.free(i.invalid);
-            try expect(true);
-        },
-        .args => |*a| {
-            defer a.clearAndFree();
+    var args_buffer: [2]ArgList = undefined;
+    const args = try parseArgs(tokens.items, &args_buffer, test_allocator);
+    defer for (0..args.arg_count) |i| {
+        args_buffer[i].clearAndFree();
+    };
 
-            const v = switch (a.items[3]) {
-                .value, .variable => |v| v,
-            };
-            std.log.err("Unexpected arg: {s}", .{v});
-            try expect(false);
-        },
+    try expect(args.invalid == null);
+    if (args.arg_count != 2) {
+        std.log.err("Expected arg count {}, but got {}\n", .{ 2, args.arg_count });
+        try expect(false);
     }
+    if (args_buffer[0].items.len != 2) {
+        std.log.err("Expected {} args, but got {}\n", .{ 2, args_buffer[0].items.len });
+        try expect(false);
+    }
+    try expect(args_buffer[1].items.len == 1);
 }
 
 test "genInvalidExpression Generate Invalid Expresion For Unexpected Token" {
