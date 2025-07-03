@@ -15,6 +15,7 @@ anything
 expression
     ""
     "EXIT"
+    "SET" space argument space argument
     request
     print
 

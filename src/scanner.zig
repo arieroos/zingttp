@@ -6,6 +6,7 @@ const String = strings.String;
 pub const Keyword = enum(u8) {
     EXIT,
     PRINT,
+    SET,
     // HTTP methods
     GET,
     POST,
@@ -253,7 +254,10 @@ fn expectTokenToBeValueAt(token: TokenInfo, value: String, position: usize) !voi
                 try expect(i == 0 or i == 1)
             else
                 try expect(false);
-            try expect(token.pos == position);
+            if (token.pos != position) {
+                std.log.err("Expected position {}, but got {}\n", .{ position, token.pos });
+                try expect(false);
+            }
         },
         else => {
             var str_buf: [1024]u8 = undefined;
@@ -298,12 +302,13 @@ test scan {
         try expect(tokens.items.len == 1);
     }
     {
-        const tokens = try scan("GET http://some_site.com", test_allocator);
+        const tokens = try scan("SET some_variable some_value", test_allocator);
         defer tokens.deinit();
 
-        try expectTokenToBeKeywordAt(tokens.items[0], Keyword.GET, 0);
-        try expectTokenToBeValueAt(tokens.items[2], "http://some_site.com", 4);
-        try expect(tokens.items.len == 3);
+        try expectTokenToBeKeywordAt(tokens.items[0], Keyword.SET, 0);
+        try expectTokenToBeValueAt(tokens.items[2], "some_variable", 4);
+        try expectTokenToBeValueAt(tokens.items[4], "some_value", 18);
+        try expect(tokens.items.len == 5);
     }
     {
         const test_val = "http://some_site.com/space=in url";
