@@ -153,7 +153,11 @@ pub const Variable = union(enum) {
 
                 var mi = m.iterator();
                 while (mi.next()) |e| {
-                    try n.mapPut(e.key_ptr.*, e.value_ptr.*, allocator);
+                    const new_value = if (e.value_ptr.*) |v|
+                        try v.copy(allocator)
+                    else
+                        null;
+                    try n.mapPut(e.key_ptr.*, new_value, allocator);
                 }
                 break :cpy n;
             },
@@ -380,3 +384,24 @@ test "Variable map deinit" {
     m.deinit();
     try expect(!std.testing.allocator_instance.detectLeaks());
 }
+
+test "Variable map copy" {
+    var m1 = Variable.initMap(test_alloc);
+    errdefer m1.deinit();
+
+    try m1.mapPut("some value", try Variable.fromStr("some value", test_alloc), test_alloc);
+    try m1.mapPut("some int", Variable.fromInt(isize, -9), test_alloc);
+    try m1.mapPut("keep_me", Variable.fromInt(isize, 16), test_alloc);
+    try m1.mapPut("nul", null, test_alloc);
+
+    var m2 = try m1.copy(test_alloc);
+    defer m2.deinit();
+
+    try m2.mapPut("some int", Variable.fromInt(u8, 128), test_alloc);
+    try expect(m1.map.get("some int").?.?.int == -9);
+    try expect(m2.map.get("some int").?.?.int == 128);
+
+    m1.deinit();
+    try expect(m2.map.get("keep_me").?.?.int == 16);
+}
+
