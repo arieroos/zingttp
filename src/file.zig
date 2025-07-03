@@ -141,7 +141,7 @@ test File {
     var test_stream = std.io.fixedBufferStream(&buffer);
     const writer = test_stream.writer();
 
-    var test_file = File(@TypeOf(writer), 1024).init(writer, "tests/basic.http", test_alloc);
+    var test_file = File(@TypeOf(writer), 1024).init(writer, "tests/basic.zttp", test_alloc);
     defer test_file.deinit();
 
     try test_file.print("hello {s}\n", .{"there"});
@@ -161,7 +161,7 @@ test "File reads through entire file" {
     var test_stream = std.io.fixedBufferStream(&buffer);
     const writer = test_stream.writer();
 
-    var test_file = File(@TypeOf(writer), 1024).init(writer, "tests/invalid.http", test_alloc);
+    var test_file = File(@TypeOf(writer), 1024).init(writer, "tests/invalid.zttp", test_alloc);
     defer test_file.deinit();
     test_file.max_chunk_size = 4;
 

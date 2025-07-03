@@ -466,7 +466,7 @@ test "Run basic file" {
         "Received response 200 (OK): 292 bytes in",
         "GET sent to https://jsonplaceholder.typicode.com/posts/1",
     };
-    try runFileTest("tests/basic.http", expecteds);
+    try runFileTest("tests/basic.zttp", expecteds);
 }
 
 test "Run invalid file" {
@@ -480,7 +480,7 @@ test "Run invalid file" {
         "Error: Expected value or variable but found whitespace at 9: ",
         "GET https://jsonplaceholder.typicode.com/posts/1",
     };
-    try runFileTest("tests/invalid.http", expecteds);
+    try runFileTest("tests/invalid.zttp", expecteds);
 }
 
 test "Run print file" {
@@ -496,5 +496,5 @@ test "Run print file" {
         "GET",
         "Hi mom! I made a \"GET\" request to https://jsonplaceholder.typicode.com/posts/1!",
     };
-    try runFileTest("tests/print.http", expecteds);
+    try runFileTest("tests/print.zttp", expecteds);
 }
