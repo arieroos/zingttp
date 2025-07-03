@@ -23,6 +23,26 @@ pub const AllocString = struct {
     }
 };
 
+pub const alphabet_lower = init: {
+    var init_value: [26]u8 = undefined;
+    for (&init_value, 0..) |*a, i| {
+        a.* = @as(u8, i) + 'a';
+    }
+    break :init init_value;
+};
+
+pub const alphabet_upper = init: {
+    var init_value: [26]u8 = undefined;
+    for (&init_value, 0..) |*a, i| {
+        a.* = @as(u8, i) + 'A';
+    }
+    break :init init_value;
+};
+
+pub const digits = "0123456789";
+pub const alphabet = alphabet_lower ++ alphabet_upper;
+pub const alphanumeric = alphabet ++ digits;
+
 pub fn eql(str1: String, str2: String) bool {
     return mem.eql(u8, str1, str2);
 }
@@ -66,6 +86,28 @@ pub fn endsWith(haystack: String, needle: String) bool {
     return mem.endsWith(u8, haystack, needle);
 }
 
+pub fn containsAny(haystack: String, needles: String) bool {
+    if (haystack.len == 0) {
+        return false;
+    }
+
+    for (needles) |needle| {
+        if (mem.containsAtLeastScalar(u8, haystack, 1, needle)) return true;
+    }
+    return false;
+}
+
+pub fn containsOnly(haystack: String, needles: String) bool {
+    if (needles.len == 0) {
+        return haystack.len == 0;
+    }
+
+    for (haystack) |c| {
+        if (!mem.containsAtLeastScalar(u8, needles, 1, c)) return false;
+    }
+    return true;
+}
+
 pub fn toOwned(val: String, allocator: Allocator) Allocator.Error!String {
     const allocated = try allocator.alloc(u8, val.len);
     mem.copyForwards(u8, allocated, val);
@@ -106,9 +148,24 @@ test AllocString {
     try expect(!std.testing.allocator_instance.detectLeaks());
 }
 
+test alphabet_lower {
+    try expect(alphabet_lower.len == 26);
+    for (alphabet_lower) |a| {
+        try expect(ascii.isAlphabetic(a) and ascii.isLower(a));
+    }
+}
+
+test alphabet_upper {
+    try expect(alphabet_upper.len == 26);
+    for (alphabet_upper) |a| {
+        try expect(ascii.isAlphabetic(a) and ascii.isUpper(a));
+    }
+}
+
 test eql {
     try expect(eql("", ""));
     try expect(!eql("", "test"));
+    try expect(!eql("a test", ""));
 
     try expect(eql("test", "test"));
     try expect(!eql("test", "test1"));
@@ -120,6 +177,7 @@ test eql {
 test iEql {
     try expect(iEql("", ""));
     try expect(!iEql("", "test"));
+    try expect(!iEql("a test", ""));
 
     try expect(iEql("test", "test"));
     try expect(!iEql("test", "test1"));
@@ -155,6 +213,7 @@ test iLstHas {
 test startsWith {
     try expect(startsWith("", ""));
     try expect(!startsWith("", "test"));
+    try expect(startsWith("a test", ""));
 
     try expect(startsWith("test something", "test"));
     try expect(!startsWith("test something", "test1"));
@@ -166,12 +225,37 @@ test startsWith {
 test endsWith {
     try expect(endsWith("", ""));
     try expect(!endsWith("", "test"));
+    try expect(endsWith("a test", ""));
 
     try expect(endsWith("a test", "test"));
     try expect(!endsWith("a test", "test1"));
 
     try expect(!endsWith("a test", "Test"));
     try expect(!endsWith("a test something", "Test1"));
+}
+
+test containsAny {
+    try expect(!containsAny("", ""));
+    try expect(!containsAny("", "test"));
+    try expect(!containsAny("a test", ""));
+
+    try expect(containsAny("a test", "test"));
+    try expect(!containsAny("a test", "fghl"));
+
+    try expect(!containsAny("a test", "TEST"));
+    try expect(!containsAny("a test something", "FGHL"));
+}
+
+test containsOnly {
+    try expect(containsOnly("", ""));
+    try expect(containsOnly("", "test"));
+    try expect(!containsOnly("a test", ""));
+
+    try expect(containsOnly("a test", "a tes"));
+    try expect(!containsOnly("a test", "test"));
+
+    try expect(!containsOnly("a test", "A TES"));
+    try expect(!containsOnly("a test something", "FGHL"));
 }
 
 test toOwned {

@@ -123,7 +123,26 @@ pub const Variable = union(enum) {
             else => return error.VariableIsNotAMap,
         }
 
-        const owned_key = try strings.toOwned(key, allocator);
+        const trimmed_key = std.mem.trim(u8, key, ". ");
+        if (strings.containsAny(trimmed_key, ".")) {
+            var spliterator = std.mem.splitScalar(u8, trimmed_key, '.');
+            var last_map = self.*;
+            while (spliterator.next()) |k| {
+                if (spliterator.peek() != null) {
+                    const new_map = if (last_map.map.get(k)) |lv|
+                        if (lv != null and lv.? == .map) lv.? else Variable.initMap(allocator)
+                    else
+                        Variable.initMap(allocator);
+                    try last_map.mapPut(k, new_map, allocator);
+                    last_map = new_map;
+                } else {
+                    try last_map.mapPut(k, val, allocator);
+                }
+            }
+            return;
+        }
+
+        const owned_key = try strings.toOwned(trimmed_key, allocator);
         errdefer allocator.free(owned_key);
 
         const entry = try self.map.getOrPut(owned_key);
@@ -289,8 +308,40 @@ pub fn resolveVariableFromPath(variable: Variable, path: String) ?Variable {
     } else return variable;
 }
 
+pub fn parseVariable(str: String, allocator: Allocator) !?Variable {
+    if (str.len == 0) {
+        return null;
+    }
+
+    if (strings.iEql(str, "null")) {
+        return null;
+    }
+    if (strings.iEql(str, "false")) {
+        return Variable.fromBool(false);
+    }
+    if (strings.iEql(str, "true")) {
+        return Variable.fromBool(true);
+    }
+    if (std.fmt.parseInt(i128, str, 0)) |v| {
+        return Variable.fromInt(i128, v);
+    } else |_| {}
+    if (std.fmt.parseFloat(f128, str)) |v| {
+        return Variable.fromFloat(f128, v);
+    } else |_| {}
+
+    if (str.len > 1 and str[0] == str[str.len - 1]) {
+        const trimmed_str = if (str[0] == '\'' or str[0] == '"') str[1 .. str.len - 1] else str;
+        return try Variable.fromStr(trimmed_str, allocator);
+    }
+    return try Variable.fromStr(str, allocator);
+}
+
 const expect = std.testing.expect;
 const expectEqualStrings = std.testing.expectEqualStrings;
+fn expectApproxEqRel(expected: f128, actual: f128) !void {
+    const tolerance = std.math.floatEps(f128);
+    return std.testing.expectApproxEqRel(expected, actual, tolerance);
+}
 const test_alloc = std.testing.allocator;
 
 test Variable {
@@ -405,3 +456,99 @@ test "Variable map copy" {
     try expect(m2.map.get("keep_me").?.?.int == 16);
 }
 
+test parseVariable {
+    var str0x5 = try Variable.fromStr("0x5", test_alloc);
+    var str0o10 = try Variable.fromStr("0o10", test_alloc);
+    var normal = try Variable.fromStr("Just a normal string", test_alloc);
+    var palindrome = try Variable.fromStr("amanaplanacanalpanama", test_alloc);
+    defer str0x5.deinit();
+    defer str0o10.deinit();
+    defer normal.deinit();
+    defer palindrome.deinit();
+
+    const cases = &[_]struct {
+        input: String,
+        output: ?Variable,
+    }{
+        .{ .input = "", .output = null },
+        .{ .input = "true", .output = Variable.fromBool(true) },
+        .{ .input = "FALSE", .output = Variable.fromBool(false) },
+        .{ .input = "5", .output = Variable.fromInt(u8, 5) },
+        .{ .input = "-5", .output = Variable.fromInt(i8, -5) },
+        .{ .input = "0x5", .output = Variable.fromInt(u8, 5) },
+        .{ .input = "0o10", .output = Variable.fromInt(u8, 8) },
+        .{ .input = "3.6", .output = Variable.fromFloat(f128, 3.6) },
+        .{ .input = "3e-6", .output = Variable.fromFloat(f128, 3e-6) },
+        .{ .input = "'0x5'", .output = str0x5 },
+        .{ .input = "\"0o10\"", .output = str0o10 },
+        .{ .input = "Just a normal string", .output = normal },
+        .{ .input = "'Just a normal string'", .output = normal },
+        .{ .input = "amanaplanacanalpanama", .output = palindrome },
+    };
+
+    inline for (cases) |case| {
+        var parsed = try parseVariable(case.input, test_alloc);
+        if (parsed) |*v| {
+            defer v.deinit();
+
+            if (case.output == null) {
+                std.log.err("\"{s}\" did not parse to null", .{case.input});
+                try expect(false);
+            }
+
+            switch (case.output.?) {
+                .boolean => |ob| {
+                    if (v.* != .boolean) {
+                        std.log.err(
+                            "\"{s}\" did not parse to boolean, but to {s}",
+                            .{ case.input, @tagName(v.*) },
+                        );
+                        try expect(false);
+                    }
+                    try expect(ob == v.*.boolean);
+                },
+                .int => |oi| {
+                    if (v.* != .int) {
+                        std.log.err(
+                            "\"{s}\" did not parse to int, but to {s}",
+                            .{ case.input, @tagName(v.*) },
+                        );
+                        try expect(false);
+                    }
+                    try expect(oi == v.*.int);
+                },
+                .float => |of| {
+                    if (v.* != .float) {
+                        std.log.err(
+                            "\"{s}\" did not parse to float, but to {s}",
+                            .{ case.input, @tagName(v.*) },
+                        );
+                        try expect(false);
+                    }
+                    try expectApproxEqRel(of, v.*.float);
+                },
+                .string => |os| {
+                    if (v.* != .string) {
+                        std.log.err(
+                            "\"{s}\" did not parse to string, but to {s}",
+                            .{ case.input, @tagName(v.*) },
+                        );
+                        try expect(false);
+                    }
+                    try expectEqualStrings(os.value, v.*.string.value);
+                },
+                else => {
+                    std.log.err(
+                        "parseVariable does not support {s}",
+                        .{@tagName(case.output.?)},
+                    );
+                },
+            }
+        } else {
+            if (case.output != null) {
+                std.log.err("\"{s}\" parsed to null", .{case.input});
+                try expect(false);
+            }
+        }
+    }
+}

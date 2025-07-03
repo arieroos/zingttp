@@ -11,6 +11,7 @@ const scanner = @import("scanner.zig");
 const parser = @import("parser.zig");
 const RequestExpr = parser.Request;
 const ArgList = parser.ArgList;
+const SetArgs = parser.SetArgs;
 
 const variable = @import("variable.zig");
 const Variable = variable.Variable;
@@ -134,6 +135,10 @@ const Context = struct {
     fn resolveVariable(self: *Context, key: String) ?Variable {
         return variable.resolveVariableFromPath(self.variables, key);
     }
+
+    fn putVariable(self: *Context, key: String, val: ?Variable) !void {
+        try self.variables.mapPut(key, val, self.allocator);
+    }
 };
 
 fn requestToVar(req: http.Request, allocator: Allocator) !Variable {
@@ -215,13 +220,7 @@ pub fn run(ui: *UserInterface, allocator: Allocator) !void {
             .invalid => |inv| try ui.print("Error: {s}\n", .{inv}),
             .request => |req| try doRequest(&ctx, req),
             .print => |p| try doPrint(&ctx, p),
-            .set => |s| try ui.print(
-                "set {s} to \"{s}\"\n",
-                .{
-                    try resolveArguments(&ctx, s.variable),
-                    try resolveArguments(&ctx, s.value),
-                },
-            ),
+            .set => |s| try doSet(&ctx, s),
         }
     }
 }
@@ -255,6 +254,33 @@ fn doRequest(ctx: *Context, req: RequestExpr) !void {
 fn doPrint(ctx: *Context, args: ArgList) !void {
     const to_print = try resolveArguments(ctx, args);
     try ctx.ui.print("{s}\n", .{to_print});
+}
+
+fn doSet(ctx: *Context, cmd: SetArgs) !void {
+    const variable_name = std.mem.trim(
+        u8,
+        try resolveArguments(ctx, cmd.variable),
+        &std.ascii.whitespace,
+    );
+
+    const allowed_chars = strings.alphanumeric ++ "_-.";
+    if (!strings.containsOnly(variable_name, allowed_chars)) {
+        try ctx.ui.print(
+            "Invalid variable name \"{s}\", should only contain one of \"{s}\"",
+            .{ variable_name, allowed_chars },
+        );
+        return;
+    }
+
+    const value = try resolveArguments(ctx, cmd.value);
+    const real_value = if (value.len == 0)
+        null
+    else if (ctx.resolveVariable(value)) |v|
+        v
+    else
+        try variable.parseVariable(value, ctx.arena.allocator());
+
+    try ctx.putVariable(variable_name, real_value);
 }
 
 fn resolveArguments(ctx: *Context, args: ArgList) !String {

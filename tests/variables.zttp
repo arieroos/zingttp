@@ -1,0 +1,6 @@
+# A test script to demonstrate how variables work
+
+# A variable can be set with the SET command
+SET my_var "some value"
+# And then accessed through a mustache template
+PRINT {{ my_var }}
