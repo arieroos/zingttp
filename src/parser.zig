@@ -22,16 +22,26 @@ pub const Request = struct {
     arguments: ArgList,
 };
 
+pub const SetArgs = struct {
+    variable: ArgList,
+    value: ArgList,
+};
+
 pub const Expression = union(enum) {
     nothing: void,
     exit: void,
     request: Request,
     print: ArgList,
+    set: SetArgs,
     invalid: String,
 
     pub fn deinit(self: *Expression, allocator: Allocator) void {
         switch (self.*) {
             .request => |*r| r.arguments.clearAndFree(),
+            .set => |*s| {
+                s.value.clearAndFree();
+                s.variable.clearAndFree();
+            },
             .print => |*p| p.clearAndFree(),
             .invalid => |i| allocator.free(i),
             else => {},
@@ -81,6 +91,7 @@ pub fn parse(tokenList: TokenList, allocator: Allocator) !Expression {
     return switch (keyword) {
         .EXIT => parseExit(arguments, allocator),
         .PRINT => parsePrint(arguments, allocator),
+        .SET => parseSet(tokens[0], arguments, allocator),
         .GET,
         .POST,
         .PUT,
@@ -90,14 +101,6 @@ pub fn parse(tokenList: TokenList, allocator: Allocator) !Expression {
         .TRACE,
         .CONNECT,
         => parseMethod(tokens[0], arguments, allocator),
-        else => genInvalidExpression(
-            InvalidReason.UnexpectedToken,
-            .{
-                .pos = 0,
-                .lexeme = tokens[0].lexeme,
-            },
-            allocator,
-        ),
     };
 }
 
@@ -126,6 +129,31 @@ fn parsePrint(arguments: []TokenInfo, allocator: Allocator) !Expression {
     }
 
     return Expression{ .print = arg_buffer[0] };
+}
+
+fn parseSet(token: TokenInfo, arguments: []TokenInfo, allocator: Allocator) !Expression {
+    var arg_buffer: [2]ArgList = undefined;
+    const args = try parseArgs(arguments, &arg_buffer, allocator);
+    if (args.invalid) |i| {
+        for (arg_buffer[0..args.arg_count]) |*a| {
+            a.clearAndFree();
+        }
+        return i;
+    }
+
+    if (args.arg_count == 0 or arg_buffer[0].items.len == 0) {
+        return genInvalidExpression(
+            InvalidReason.MissingToken,
+            .{
+                .expected = "value or variable",
+                .pos = token.pos + token.lexeme.len,
+            },
+            allocator,
+        );
+    }
+
+    const value_args = if (args.arg_count == 2) arg_buffer[1] else ArgList.init(allocator);
+    return Expression{ .set = .{ .variable = arg_buffer[0], .value = value_args } };
 }
 
 fn parseMethod(token: TokenInfo, arguments: []TokenInfo, allocator: Allocator) !Expression {
@@ -322,6 +350,24 @@ test parse {
 
         try expectArgumentAt(expression.print, 0, "gg");
         try expectArgumentAt(expression.print, 1, "some.variable");
+    }
+    {
+        var tokens = try genTestTokenList(&[_]Token{
+            Token{ .keyword = Keyword.SET },
+            Token{ .whitespace = 1 },
+            Token{ .value = "gg" },
+            Token{ .whitespace = 1 },
+            Token{ .variable = "some.variable" },
+            Token{ .value = ".value" },
+        });
+        defer tokens.deinit();
+
+        var expression = try parse(tokens, test_allocator);
+        defer expression.deinit(test_allocator);
+
+        try expectArgumentAt(expression.set.variable, 0, "gg");
+        try expectArgumentAt(expression.set.value, 0, "some.variable");
+        try expectArgumentAt(expression.set.value, 1, ".value");
     }
 }
 

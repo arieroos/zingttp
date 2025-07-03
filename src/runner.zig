@@ -215,6 +215,13 @@ pub fn run(ui: *UserInterface, allocator: Allocator) !void {
             .invalid => |inv| try ui.print("Error: {s}\n", .{inv}),
             .request => |req| try doRequest(&ctx, req),
             .print => |p| try doPrint(&ctx, p),
+            .set => |s| try ui.print(
+                "set {s} to \"{s}\"\n",
+                .{
+                    try resolveArguments(&ctx, s.variable),
+                    try resolveArguments(&ctx, s.value),
+                },
+            ),
         }
     }
 }
