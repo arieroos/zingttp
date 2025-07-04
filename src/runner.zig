@@ -13,8 +13,8 @@ const RequestExpr = parser.Request;
 const ArgList = parser.ArgList;
 const SetArgs = parser.SetArgs;
 
-const variable = @import("variable.zig");
-const Variable = variable.Variable;
+const variables = @import("variables.zig");
+const Variable = variables.Variable;
 
 const repl = @import("repl.zig");
 const http = @import("http.zig");
@@ -133,11 +133,44 @@ const Context = struct {
     }
 
     fn resolveVariable(self: *Context, key: String) ?Variable {
-        return variable.resolveVariableFromPath(self.variables, key);
+        return variables.resolveVariableFromPath(self.variables, key);
     }
 
     fn putVariable(self: *Context, key: String, val: ?Variable) !void {
-        try self.variables.mapPut(key, val, self.allocator);
+        var parent_map = &self.variables;
+        var spliterator = std.mem.splitScalar(u8, key, '.');
+
+        var actual_key: String = key;
+        while (spliterator.next()) |key_part| {
+            actual_key = key_part;
+            if (spliterator.peek() == null) {
+                break;
+            }
+            const var_at_path = parent_map.mapGet(key_part);
+            if (var_at_path != null and var_at_path.? == .map) {
+                var map_ptr = var_at_path.?;
+                parent_map = &map_ptr;
+            } else break;
+        }
+
+        const key_left = spliterator.rest();
+        if (key_left.len == 0) {
+            var put_val = if (val) |v| try v.copy(self.allocator) else null;
+            errdefer if (put_val) |*pv| pv.deinit();
+
+            try parent_map.mapPut(actual_key, put_val, self.allocator);
+            return;
+        }
+
+        if (val == null) {
+            debug.println("{s} is already null", .{key});
+            return;
+        }
+
+        var put_map = try variables.buildMap(key_left, val.?, self.allocator);
+        errdefer put_map.deinit();
+
+        try parent_map.mapPut(actual_key, put_map, self.allocator);
     }
 };
 
@@ -272,15 +305,25 @@ fn doSet(ctx: *Context, cmd: SetArgs) !void {
         return;
     }
 
-    const value = try resolveArguments(ctx, cmd.value);
-    const real_value = if (value.len == 0)
-        null
-    else if (ctx.resolveVariable(value)) |v|
-        v
-    else
-        try variable.parseVariable(value, ctx.arena.allocator());
+    const value = if (cmd.value.items.len == 1 and cmd.value.items[0] == .variable)
+        ctx.resolveVariable(cmd.value.items[0].variable)
+    else parse: {
+        const arg_val = try resolveArguments(ctx, cmd.value);
+        break :parse if (arg_val.len == 0)
+            null
+        else
+            try variables.parseVariable(arg_val, ctx.arena.allocator());
+    };
 
-    try ctx.putVariable(variable_name, real_value);
+    try ctx.putVariable(variable_name, value);
+    if (debug.isActive()) {
+        const var_disp = try if (value) |v|
+            v.toStrAlloc(ctx.arena.allocator())
+        else
+            strings.toOwned("null", ctx.arena.allocator());
+
+        debug.println("Set {s} to {s}", .{ variable_name, var_disp });
+    }
 }
 
 fn resolveArguments(ctx: *Context, args: ArgList) !String {
@@ -342,6 +385,42 @@ test "run can make a request and print the requested url" {
     try expect(outputs.len == 3);
     try expectStringStartsWith(outputs[1], "Done");
     try expectStringStartsWith(outputs[2], "Made a GET request to https://jsonplaceholder.typicode.com/posts/1");
+}
+
+test "run can set and print variables" {
+    const cmds = [_]String{
+        "SET hello world",
+        "PRINT {{ hello }}",
+        "SET hello2 {{hello}}",
+        "PRINT {{hello2}}",
+        "SET hello.world hello",
+        "PRINT {{hello.world}}",
+        "SET hello.world hello1",
+        "SET hello.world2 hello2",
+        "PRINT {{hello.world}}",
+        "PRINT {{hello.world2}}",
+        "SET hello.world.my.name.is hello4",
+        "SET hello.world2 hello3",
+        "PRINT {{hello.world2}}",
+        "PRINT {{hello.world.my.name.is}}",
+        "SET hello.world ",
+        "PRINT {{hello.world.my.name.is}}",
+    };
+    var test_ui = makeTestUi(&cmds);
+    defer test_ui.testing.deinit();
+
+    try run(&test_ui, test_alloc);
+
+    const outputs = test_ui.testing.getOutputMsgs();
+    try expect(outputs.len == 8);
+    try expectEqualStrings(outputs[0], "world\n");
+    try expectEqualStrings(outputs[1], "world\n");
+    try expectEqualStrings(outputs[2], "hello\n");
+    try expectEqualStrings(outputs[3], "hello1\n");
+    try expectEqualStrings(outputs[4], "hello2\n");
+    try expectEqualStrings(outputs[5], "hello3\n");
+    try expectEqualStrings(outputs[6], "hello4\n");
+    try expectEqualStrings(outputs[7], "\n");
 }
 
 fn makeTestResponse(body: String) !http.Request {
@@ -412,6 +491,25 @@ test "Context.resolveVariable resolves request variables" {
     }
 }
 
+fn makeTestArgList(args: []const parser.Argument) !ArgList {
+    var arg_list = try ArgList.initCapacity(test_alloc, args.len);
+    arg_list.appendSliceAssumeCapacity(args);
+    return arg_list;
+}
+
+test "doSet sets variables" {
+    var ctx = makeTestCtx();
+    defer ctx.deinit();
+
+    var var_name_1 = try makeTestArgList(&[_]parser.Argument{.{ .value = "test_var" }});
+    defer var_name_1.clearAndFree();
+    var var_1 = try makeTestArgList(&[_]parser.Argument{.{ .value = "1" }});
+    defer var_1.clearAndFree();
+
+    try doSet(&ctx, .{ .variable = var_name_1, .value = var_1 });
+    try expect(ctx.resolveVariable("test_var").?.int == 1);
+}
+
 test "resolveArguments resolves arguments" {
     var ctx = makeTestCtx();
     defer ctx.deinit();
@@ -428,9 +526,8 @@ test "resolveArguments resolves arguments" {
         .{ .value = " Request" },
         .{ .variable = "method" },
     };
-    var arg_list = try ArgList.initCapacity(test_alloc, args.len);
+    var arg_list = try makeTestArgList(&args);
     defer arg_list.clearAndFree();
-    arg_list.appendSliceAssumeCapacity(&args);
 
     const resolved = try resolveArguments(&ctx, arg_list);
 

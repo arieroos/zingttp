@@ -118,31 +118,9 @@ pub const Variable = union(enum) {
     }
 
     pub fn mapPut(self: *Self, key: String, val: ?Variable, allocator: Allocator) !void {
-        switch (self.*) {
-            .map => {},
-            else => return error.VariableIsNotAMap,
-        }
+        std.debug.assert(self.* == .map);
 
-        const trimmed_key = std.mem.trim(u8, key, ". ");
-        if (strings.containsAny(trimmed_key, ".")) {
-            var spliterator = std.mem.splitScalar(u8, trimmed_key, '.');
-            var last_map = self.*;
-            while (spliterator.next()) |k| {
-                if (spliterator.peek() != null) {
-                    const new_map = if (last_map.map.get(k)) |lv|
-                        if (lv != null and lv.? == .map) lv.? else Variable.initMap(allocator)
-                    else
-                        Variable.initMap(allocator);
-                    try last_map.mapPut(k, new_map, allocator);
-                    last_map = new_map;
-                } else {
-                    try last_map.mapPut(k, val, allocator);
-                }
-            }
-            return;
-        }
-
-        const owned_key = try strings.toOwned(trimmed_key, allocator);
+        const owned_key = try strings.toOwned(key, allocator);
         errdefer allocator.free(owned_key);
 
         const entry = try self.map.getOrPut(owned_key);
@@ -151,6 +129,12 @@ pub const Variable = union(enum) {
             if (entry.value_ptr.*) |*v| v.deinit();
         }
         entry.value_ptr.* = val;
+    }
+
+    pub fn mapGet(self: Self, key: String) ?Variable {
+        std.debug.assert(self == .map);
+
+        return if (self.map.get(key)) |v| v else null;
     }
 
     pub fn copy(self: Self, allocator: Allocator) !Self {
@@ -291,8 +275,8 @@ pub fn resolveVariableFromPath(variable: Variable, path: String) ?Variable {
         _ = spliterator.next();
     }
 
-    debug.println("Looking for variable at {s}", .{path});
     if (spliterator.next()) |part| {
+        debug.println("Looking up variable {s}", .{path});
         switch (variable) {
             .boolean, .float, .int, .string => return null,
             .list => |l| {
@@ -334,6 +318,22 @@ pub fn parseVariable(str: String, allocator: Allocator) !?Variable {
         return try Variable.fromStr(trimmed_str, allocator);
     }
     return try Variable.fromStr(str, allocator);
+}
+
+pub fn buildMap(keys: String, val: Variable, allocator: Allocator) !Variable {
+    var spliterator = std.mem.splitBackwardsScalar(u8, keys, '.');
+
+    var result_var = try val.copy(allocator);
+    errdefer result_var.deinit();
+
+    while (spliterator.next()) |key_part| {
+        if (key_part.len == 0) return error.InvalidKey;
+
+        var new_map = Variable.initMap(allocator);
+        try new_map.mapPut(key_part, result_var, allocator);
+        result_var = new_map;
+    }
+    return result_var;
 }
 
 const expect = std.testing.expect;
@@ -412,10 +412,10 @@ test "Variable map put" {
     defer m.deinit();
 
     try m.mapPut("some int", Variable.fromInt(isize, -9), test_alloc);
-    try expect(-9 == m.map.get("some int").?.?.int);
+    try expect(-9 == m.mapGet("some int").?.int);
 
     try m.mapPut("nul", null, test_alloc);
-    try expect(null == m.map.get("nul").?);
+    try expect(null == m.mapGet("nul"));
 }
 
 test "Variable map deinit" {
@@ -449,11 +449,11 @@ test "Variable map copy" {
     defer m2.deinit();
 
     try m2.mapPut("some int", Variable.fromInt(u8, 128), test_alloc);
-    try expect(m1.map.get("some int").?.?.int == -9);
-    try expect(m2.map.get("some int").?.?.int == 128);
+    try expect(m1.mapGet("some int").?.int == -9);
+    try expect(m2.mapGet("some int").?.int == 128);
 
     m1.deinit();
-    try expect(m2.map.get("keep_me").?.?.int == 16);
+    try expect(m2.mapGet("keep_me").?.int == 16);
 }
 
 test parseVariable {
@@ -551,4 +551,19 @@ test parseVariable {
             }
         }
     }
+}
+
+test buildMap {
+    var m1 = try buildMap("a", Variable.fromInt(u8, 1), test_alloc);
+    defer m1.deinit();
+    try expect(m1.mapGet("a").?.int == 1);
+
+    var m2 = try buildMap("a.b", Variable.fromInt(u8, 1), test_alloc);
+    defer m2.deinit();
+    try expect(m2.mapGet("a").? == .map);
+    try expect(m2.mapGet("a").?.mapGet("b").?.int == 1);
+
+    var e = buildMap("a.b..c", Variable.fromInt(u8, 1), test_alloc);
+    errdefer if (e) |*v| v.deinit() else |_| {};
+    try std.testing.expectError(error.InvalidKey, e);
 }

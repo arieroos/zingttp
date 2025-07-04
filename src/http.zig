@@ -49,7 +49,7 @@ pub const HeaderMap = struct {
 
     pub fn putManyKeys(self: *HeaderMap, keys_and_values: []const []const String) !void {
         for (keys_and_values) |kv| {
-            std.debug.assert(kv.len > 1);
+            assert(kv.len > 1);
             for (kv[1..]) |v| {
                 try self.putSingle(kv[0], v);
             }
