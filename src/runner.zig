@@ -109,13 +109,13 @@ const Context = struct {
     options: http.Options = .{},
     // TODO: A way to specify options
 
-    fn init(ui: *UserInterface, allocator: Allocator) Context {
+    fn init(ui: *UserInterface, allocator: Allocator) !Context {
         return Context{
             .allocator = allocator,
             .arena = std.heap.ArenaAllocator.init(allocator),
             .client = http.client(allocator),
             .ui = ui,
-            .variables = Variable.initMap(allocator),
+            .variables = try Variable.initMap(allocator),
         };
     }
 
@@ -132,12 +132,12 @@ const Context = struct {
         self.client.deinit();
     }
 
-    fn resolveVariable(self: *Context, key: String) ?Variable {
+    fn resolveVariable(self: *Context, key: String) Variable {
         return variables.resolveVariableFromPath(self.variables, key);
     }
 
-    fn putVariable(self: *Context, key: String, val: ?Variable) !void {
-        var parent_map = &self.variables;
+    fn putVariable(self: *Context, key: String, val: Variable) !void {
+        var parent_map = self.variables;
         var spliterator = std.mem.splitScalar(u8, key, '.');
 
         var actual_key: String = key;
@@ -148,26 +148,25 @@ const Context = struct {
             }
             const var_at_path = parent_map.mapGet(key_part);
             if (var_at_path != null and var_at_path.? == .map) {
-                var map_ptr = var_at_path.?;
-                parent_map = &map_ptr;
+                parent_map = var_at_path.?;
             } else break;
         }
 
         const key_left = spliterator.rest();
         if (key_left.len == 0) {
-            var put_val = if (val) |v| try v.copy(self.allocator) else null;
-            errdefer if (put_val) |*pv| pv.deinit();
+            var put_val = try val.copy(self.allocator);
+            errdefer put_val.deinit();
 
             try parent_map.mapPut(actual_key, put_val, self.allocator);
             return;
         }
 
-        if (val == null) {
+        if (val == Variable.null) {
             debug.println("{s} is already null", .{key});
             return;
         }
 
-        var put_map = try variables.buildMap(key_left, val.?, self.allocator);
+        var put_map = try variables.buildMap(key_left, val, self.allocator);
         errdefer put_map.deinit();
 
         try parent_map.mapPut(actual_key, put_map, self.allocator);
@@ -175,7 +174,7 @@ const Context = struct {
 };
 
 fn requestToVar(req: http.Request, allocator: Allocator) !Variable {
-    var map = Variable.initMap(allocator);
+    var map = try Variable.initMap(allocator);
     errdefer map.deinit();
 
     try map.mapPutAny(String, "method", req.method, allocator);
@@ -192,7 +191,7 @@ fn requestToVar(req: http.Request, allocator: Allocator) !Variable {
 }
 
 fn responseToVar(resp: http.Response, allocator: Allocator) !Variable {
-    var map = Variable.initMap(allocator);
+    var map = try Variable.initMap(allocator);
     errdefer map.deinit();
 
     var buf: [256]u8 = undefined;
@@ -213,7 +212,7 @@ fn responseToVar(resp: http.Response, allocator: Allocator) !Variable {
 }
 
 fn headerMapToVar(header_map: http.HeaderMap, allocator: Allocator) !Variable {
-    var map = Variable.initMap(allocator);
+    var map = try Variable.initMap(allocator);
     errdefer map.deinit();
 
     for (header_map.map.keys()) |key| {
@@ -224,7 +223,7 @@ fn headerMapToVar(header_map: http.HeaderMap, allocator: Allocator) !Variable {
 }
 
 pub fn run(ui: *UserInterface, allocator: Allocator) !void {
-    var ctx = Context.init(ui, allocator);
+    var ctx = try Context.init(ui, allocator);
     defer ctx.deinit();
 
     const arena_alloc = ctx.arena.allocator();
@@ -309,19 +308,12 @@ fn doSet(ctx: *Context, cmd: SetArgs) !void {
         ctx.resolveVariable(cmd.value.items[0].variable)
     else parse: {
         const arg_val = try resolveArguments(ctx, cmd.value);
-        break :parse if (arg_val.len == 0)
-            null
-        else
-            try variables.parseVariable(arg_val, ctx.arena.allocator());
+        break :parse try variables.parseVariable(arg_val, ctx.arena.allocator());
     };
 
     try ctx.putVariable(variable_name, value);
     if (debug.isActive()) {
-        const var_disp = try if (value) |v|
-            v.toStrAlloc(ctx.arena.allocator())
-        else
-            strings.toOwned("null", ctx.arena.allocator());
-
+        const var_disp = try value.toStrAlloc(ctx.arena.allocator());
         debug.println("Set {s} to {s}", .{ variable_name, var_disp });
     }
 }
@@ -338,10 +330,10 @@ fn resolveArguments(ctx: *Context, args: ArgList) !String {
             .value => |v| try str_builder.appendSlice(v),
             .variable => |v| {
                 var val = ctx.resolveVariable(v);
-                if (val == null) {
+                if (val == Variable.null) {
                     debug.println("{s} has null value", .{v});
                 } else {
-                    const str_val = try val.?.toStrAlloc(allocator);
+                    const str_val = try val.toStrAlloc(allocator);
                     try str_builder.appendSlice(str_val);
                 }
             },
@@ -360,9 +352,9 @@ fn makeTestUi(inputs: []const String) UserInterface {
     return UserInterface{ .testing = TestUi.init(inputs, test_alloc) };
 }
 
-fn makeTestCtx() Context {
+fn makeTestCtx() !Context {
     var test_ui = makeTestUi(&[_]String{});
-    return Context.init(&test_ui, test_alloc);
+    return try Context.init(&test_ui, test_alloc);
 }
 
 test run {
@@ -438,7 +430,7 @@ fn makeTestResponse(body: String) !http.Request {
 }
 
 test "Context.updateLastResponse does not leak memory" {
-    var ctx = makeTestCtx();
+    var ctx = try makeTestCtx();
     errdefer ctx.deinit();
 
     var resp1 = try makeTestResponse("Something nice and long, we want to to check for memory leaks.");
@@ -454,7 +446,7 @@ test "Context.updateLastResponse does not leak memory" {
 }
 
 test "Context.resolveVariable resolves request variables" {
-    var ctx = makeTestCtx();
+    var ctx = try makeTestCtx();
     defer ctx.deinit();
 
     var resp = try makeTestResponse("Some data in the reply");
@@ -479,12 +471,8 @@ test "Context.resolveVariable resolves request variables" {
 
     inline for (&cases) |case| {
         var var_val = ctx.resolveVariable("last_request." ++ case.key);
-        if (var_val == null) {
-            std.log.err("Unexpected null value for key {s}", .{case.key});
-            try expect(false);
-        }
 
-        const str = try var_val.?.toStrAlloc(test_alloc);
+        const str = try var_val.toStrAlloc(test_alloc);
         defer test_alloc.free(str);
 
         try expectEqualStrings(case.expected, str);
@@ -498,7 +486,7 @@ fn makeTestArgList(args: []const parser.Argument) !ArgList {
 }
 
 test "doSet sets variables" {
-    var ctx = makeTestCtx();
+    var ctx = try makeTestCtx();
     defer ctx.deinit();
 
     var var_name_1 = try makeTestArgList(&[_]parser.Argument{.{ .value = "test_var" }});
@@ -507,11 +495,11 @@ test "doSet sets variables" {
     defer var_1.clearAndFree();
 
     try doSet(&ctx, .{ .variable = var_name_1, .value = var_1 });
-    try expect(ctx.resolveVariable("test_var").?.int == 1);
+    try expect(ctx.resolveVariable("test_var").int == 1);
 }
 
 test "resolveArguments resolves arguments" {
-    var ctx = makeTestCtx();
+    var ctx = try makeTestCtx();
     defer ctx.deinit();
 
     var resp = try makeTestResponse("");
@@ -625,6 +613,7 @@ test "Run print file" {
         "GET",
         "GET",
         "Hi mom! I made a \"GET\" request to https://jsonplaceholder.typicode.com/posts/1!",
+        "\n",
     };
     try runFileTest("tests/print.zttp", expecteds);
 }

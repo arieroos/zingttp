@@ -11,17 +11,18 @@ const StringBuilder = strings.StringBuilder;
 const AllocString = strings.AllocString;
 
 pub const VariableList = std.ArrayList(Variable);
-pub const VariableMap = std.StringHashMap(?Variable);
+pub const VariableMap = std.StringHashMap(Variable);
 
 pub const Variable = union(enum) {
     const Self = @This();
 
+    null: void,
     boolean: bool,
     int: i128,
     float: f128,
     string: AllocString,
     list: VariableList,
-    map: VariableMap,
+    map: *VariableMap,
 
     pub fn init(comptime T: type, val: T, allocator: Allocator) !Self {
         const type_info = @typeInfo(T);
@@ -42,8 +43,10 @@ pub const Variable = union(enum) {
         };
     }
 
-    pub fn initMap(allocator: Allocator) Self {
-        return Self{ .map = VariableMap.init(allocator) };
+    pub fn initMap(allocator: Allocator) !Self {
+        const m = try allocator.create(VariableMap);
+        m.* = VariableMap.init(allocator);
+        return Self{ .map = m };
     }
 
     pub fn fromBool(val: bool) Self {
@@ -92,6 +95,7 @@ pub const Variable = union(enum) {
 
     pub fn toStrAllocDepth(self: Self, depth: usize, allocator: Allocator) !String {
         return switch (self) {
+            .null => strings.toOwned("", allocator),
             inline .boolean, .int => |x| std.fmt.allocPrint(allocator, "{}", .{x}),
             .float => |f| blk: {
                 const abs = @abs(f);
@@ -102,7 +106,7 @@ pub const Variable = union(enum) {
             },
             .string => |s| strings.toOwned(s.value, allocator),
             .list => |l| try stringifyList(l, depth, allocator),
-            .map => |m| try stringifyMap(m, depth, allocator),
+            .map => |m| try stringifyMap(m.*, depth, allocator),
         };
     }
 
@@ -117,7 +121,7 @@ pub const Variable = union(enum) {
         try self.mapPut(key, v, allocator);
     }
 
-    pub fn mapPut(self: *Self, key: String, val: ?Variable, allocator: Allocator) !void {
+    pub fn mapPut(self: *Self, key: String, val: Variable, allocator: Allocator) !void {
         std.debug.assert(self.* == .map);
 
         const owned_key = try strings.toOwned(key, allocator);
@@ -125,8 +129,8 @@ pub const Variable = union(enum) {
 
         const entry = try self.map.getOrPut(owned_key);
         if (entry.found_existing) {
-            defer allocator.free(owned_key);
-            if (entry.value_ptr.*) |*v| v.deinit();
+            allocator.free(owned_key);
+            entry.value_ptr.deinit();
         }
         entry.value_ptr.* = val;
     }
@@ -139,7 +143,7 @@ pub const Variable = union(enum) {
 
     pub fn copy(self: Self, allocator: Allocator) !Self {
         return switch (self) {
-            .boolean, .int, .float => self,
+            .null, .boolean, .int, .float => self,
             .string => |s| Self.fromStr(s.value, allocator),
             .list => |l| cpy: {
                 var n = try VariableList.initCapacity(allocator, l.items.len);
@@ -151,15 +155,12 @@ pub const Variable = union(enum) {
                 break :cpy Variable{ .list = n };
             },
             .map => |m| cpy: {
-                var n = Variable{ .map = VariableMap.init(allocator) };
+                var n = try Variable.initMap(allocator);
                 errdefer n.deinit();
 
                 var mi = m.iterator();
                 while (mi.next()) |e| {
-                    const new_value = if (e.value_ptr.*) |v|
-                        try v.copy(allocator)
-                    else
-                        null;
+                    const new_value = try e.value_ptr.copy(allocator);
                     try n.mapPut(e.key_ptr.*, new_value, allocator);
                 }
                 break :cpy n;
@@ -169,7 +170,7 @@ pub const Variable = union(enum) {
 
     pub fn deinit(self: *Self) void {
         switch (self.*) {
-            .boolean, .int, .float => {},
+            .null, .boolean, .int, .float => {},
             .string => |*s| s.deinit(),
             .list => |*l| {
                 for (l.items) |*e| {
@@ -177,14 +178,15 @@ pub const Variable = union(enum) {
                 }
                 l.clearAndFree();
             },
-            .map => |*m| {
+            .map => |m| {
                 var i = m.iterator();
                 while (i.next()) |e| {
-                    if (e.value_ptr.*) |*v| v.deinit();
+                    e.value_ptr.*.deinit();
                     m.allocator.free(e.key_ptr.*);
                 }
 
-                m.deinit();
+                m.clearAndFree();
+                m.allocator.destroy(m);
             },
         }
     }
@@ -248,8 +250,8 @@ fn stringifyMap(m: VariableMap, depth: usize, allocator: Allocator) Allocator.Er
         try builder.appendSlice(e.key_ptr.*);
         try builder.appendSlice(": ");
 
-        if (e.value_ptr.*) |v| {
-            const str = try v.toStrAllocDepth(depth + 1, allocator);
+        if (e.value_ptr.* != Variable.null) {
+            const str = try e.value_ptr.toStrAllocDepth(depth + 1, allocator);
             defer allocator.free(str);
 
             try builder.appendSlice(str);
@@ -265,7 +267,7 @@ fn stringifyMap(m: VariableMap, depth: usize, allocator: Allocator) Allocator.Er
     return builder.toOwnedSlice();
 }
 
-pub fn resolveVariableFromPath(variable: Variable, path: String) ?Variable {
+pub fn resolveVariableFromPath(variable: Variable, path: String) Variable {
     var spliterator = std.mem.splitScalar(u8, path, '.');
 
     while (spliterator.peek()) |p| {
@@ -278,27 +280,27 @@ pub fn resolveVariableFromPath(variable: Variable, path: String) ?Variable {
     if (spliterator.next()) |part| {
         debug.println("Looking up variable {s}", .{path});
         switch (variable) {
-            .boolean, .float, .int, .string => return null,
+            .boolean, .float, .int, .string, .null => return .null,
             .list => |l| {
-                if (spliterator.peek()) |_| return null;
-                const idx = std.fmt.parseInt(usize, part, 10) catch return null;
-                return if (idx < l.items.len) l.items[idx] else null;
+                if (spliterator.peek()) |_| return .null;
+                const idx = std.fmt.parseInt(usize, part, 10) catch return .null;
+                return if (idx < l.items.len) l.items[idx] else .null;
             },
-            .map => |m| return if (m.get(part)) |p|
-                if (p) |pr| resolveVariableFromPath(pr, spliterator.rest()) else null
+            .map => |m| return if (m.get(part)) |pr|
+                resolveVariableFromPath(pr, spliterator.rest())
             else
-                null,
+                .null,
         }
     } else return variable;
 }
 
-pub fn parseVariable(str: String, allocator: Allocator) !?Variable {
+pub fn parseVariable(str: String, allocator: Allocator) !Variable {
     if (str.len == 0) {
-        return null;
+        return .null;
     }
 
     if (strings.iEql(str, "null")) {
-        return null;
+        return .null;
     }
     if (strings.iEql(str, "false")) {
         return Variable.fromBool(false);
@@ -329,7 +331,7 @@ pub fn buildMap(keys: String, val: Variable, allocator: Allocator) !Variable {
     while (spliterator.next()) |key_part| {
         if (key_part.len == 0) return error.InvalidKey;
 
-        var new_map = Variable.initMap(allocator);
+        var new_map = try Variable.initMap(allocator);
         try new_map.mapPut(key_part, result_var, allocator);
         result_var = new_map;
     }
@@ -408,25 +410,25 @@ test Variable {
 }
 
 test "Variable map put" {
-    var m = Variable{ .map = VariableMap.init(test_alloc) };
+    var m = try Variable.initMap(test_alloc);
     defer m.deinit();
 
     try m.mapPut("some int", Variable.fromInt(isize, -9), test_alloc);
     try expect(-9 == m.mapGet("some int").?.int);
 
-    try m.mapPut("nul", null, test_alloc);
-    try expect(null == m.mapGet("nul"));
+    try m.mapPut("nul", Variable.null, test_alloc);
+    try expect(Variable.null == m.mapGet("nul").?);
 }
 
 test "Variable map deinit" {
-    var m = Variable.initMap(test_alloc);
+    var m = try Variable.initMap(test_alloc);
     errdefer m.deinit();
 
     try m.mapPut("some value", try Variable.fromStr("some value", test_alloc), test_alloc);
     try m.mapPut("some int", Variable.fromInt(isize, -9), test_alloc);
-    try m.mapPut("nul", null, test_alloc);
+    try m.mapPut("nul", Variable.null, test_alloc);
 
-    var subMap = Variable.initMap(test_alloc);
+    var subMap = try Variable.initMap(test_alloc);
     errdefer subMap.deinit();
     try subMap.mapPutAny(String, "nested", "deinit", test_alloc);
 
@@ -437,13 +439,13 @@ test "Variable map deinit" {
 }
 
 test "Variable map copy" {
-    var m1 = Variable.initMap(test_alloc);
+    var m1 = try Variable.initMap(test_alloc);
     errdefer m1.deinit();
 
     try m1.mapPut("some value", try Variable.fromStr("some value", test_alloc), test_alloc);
     try m1.mapPut("some int", Variable.fromInt(isize, -9), test_alloc);
     try m1.mapPut("keep_me", Variable.fromInt(isize, 16), test_alloc);
-    try m1.mapPut("nul", null, test_alloc);
+    try m1.mapPut("nul", Variable.null, test_alloc);
 
     var m2 = try m1.copy(test_alloc);
     defer m2.deinit();
@@ -454,6 +456,23 @@ test "Variable map copy" {
 
     m1.deinit();
     try expect(m2.mapGet("keep_me").?.int == 16);
+}
+
+test "stringifyMap" {
+    var m = try Variable.initMap(test_alloc);
+    defer m.deinit();
+
+    try m.mapPut("v1", Variable.fromInt(u8, 22), test_alloc);
+    try m.mapPut("v2", Variable.fromInt(u8, 22), test_alloc);
+
+    var inner = try Variable.initMap(test_alloc);
+    try inner.mapPut("str", try Variable.fromStr("44xy", test_alloc), test_alloc);
+    try m.mapPut("inner", inner, test_alloc);
+
+    const to_str = try m.toStrAlloc(test_alloc);
+    defer test_alloc.free(to_str);
+
+    std.debug.print("\n{s}\n", .{to_str});
 }
 
 test parseVariable {
@@ -468,87 +487,76 @@ test parseVariable {
 
     const cases = &[_]struct {
         input: String,
-        output: ?Variable,
+        expected: Variable,
     }{
-        .{ .input = "", .output = null },
-        .{ .input = "true", .output = Variable.fromBool(true) },
-        .{ .input = "FALSE", .output = Variable.fromBool(false) },
-        .{ .input = "5", .output = Variable.fromInt(u8, 5) },
-        .{ .input = "-5", .output = Variable.fromInt(i8, -5) },
-        .{ .input = "0x5", .output = Variable.fromInt(u8, 5) },
-        .{ .input = "0o10", .output = Variable.fromInt(u8, 8) },
-        .{ .input = "3.6", .output = Variable.fromFloat(f128, 3.6) },
-        .{ .input = "3e-6", .output = Variable.fromFloat(f128, 3e-6) },
-        .{ .input = "'0x5'", .output = str0x5 },
-        .{ .input = "\"0o10\"", .output = str0o10 },
-        .{ .input = "Just a normal string", .output = normal },
-        .{ .input = "'Just a normal string'", .output = normal },
-        .{ .input = "amanaplanacanalpanama", .output = palindrome },
+        .{ .input = "", .expected = .null },
+        .{ .input = "true", .expected = Variable.fromBool(true) },
+        .{ .input = "FALSE", .expected = Variable.fromBool(false) },
+        .{ .input = "5", .expected = Variable.fromInt(u8, 5) },
+        .{ .input = "-5", .expected = Variable.fromInt(i8, -5) },
+        .{ .input = "0x5", .expected = Variable.fromInt(u8, 5) },
+        .{ .input = "0o10", .expected = Variable.fromInt(u8, 8) },
+        .{ .input = "3.6", .expected = Variable.fromFloat(f128, 3.6) },
+        .{ .input = "3e-6", .expected = Variable.fromFloat(f128, 3e-6) },
+        .{ .input = "'0x5'", .expected = str0x5 },
+        .{ .input = "\"0o10\"", .expected = str0o10 },
+        .{ .input = "Just a normal string", .expected = normal },
+        .{ .input = "'Just a normal string'", .expected = normal },
+        .{ .input = "amanaplanacanalpanama", .expected = palindrome },
     };
 
     inline for (cases) |case| {
         var parsed = try parseVariable(case.input, test_alloc);
-        if (parsed) |*v| {
-            defer v.deinit();
+        defer parsed.deinit();
 
-            if (case.output == null) {
-                std.log.err("\"{s}\" did not parse to null", .{case.input});
-                try expect(false);
-            }
-
-            switch (case.output.?) {
-                .boolean => |ob| {
-                    if (v.* != .boolean) {
-                        std.log.err(
-                            "\"{s}\" did not parse to boolean, but to {s}",
-                            .{ case.input, @tagName(v.*) },
-                        );
-                        try expect(false);
-                    }
-                    try expect(ob == v.*.boolean);
-                },
-                .int => |oi| {
-                    if (v.* != .int) {
-                        std.log.err(
-                            "\"{s}\" did not parse to int, but to {s}",
-                            .{ case.input, @tagName(v.*) },
-                        );
-                        try expect(false);
-                    }
-                    try expect(oi == v.*.int);
-                },
-                .float => |of| {
-                    if (v.* != .float) {
-                        std.log.err(
-                            "\"{s}\" did not parse to float, but to {s}",
-                            .{ case.input, @tagName(v.*) },
-                        );
-                        try expect(false);
-                    }
-                    try expectApproxEqRel(of, v.*.float);
-                },
-                .string => |os| {
-                    if (v.* != .string) {
-                        std.log.err(
-                            "\"{s}\" did not parse to string, but to {s}",
-                            .{ case.input, @tagName(v.*) },
-                        );
-                        try expect(false);
-                    }
-                    try expectEqualStrings(os.value, v.*.string.value);
-                },
-                else => {
+        switch (case.expected) {
+            .null => try expect(parsed == .null),
+            .boolean => |ob| {
+                if (parsed != .boolean) {
                     std.log.err(
-                        "parseVariable does not support {s}",
-                        .{@tagName(case.output.?)},
+                        "\"{s}\" did not parse to boolean, but to {s}",
+                        .{ case.input, @tagName(parsed) },
                     );
-                },
-            }
-        } else {
-            if (case.output != null) {
-                std.log.err("\"{s}\" parsed to null", .{case.input});
-                try expect(false);
-            }
+                    try expect(false);
+                }
+                try expect(ob == parsed.boolean);
+            },
+            .int => |oi| {
+                if (parsed != .int) {
+                    std.log.err(
+                        "\"{s}\" did not parse to int, but to {s}",
+                        .{ case.input, @tagName(parsed) },
+                    );
+                    try expect(false);
+                }
+                try expect(oi == parsed.int);
+            },
+            .float => |of| {
+                if (parsed != .float) {
+                    std.log.err(
+                        "\"{s}\" did not parse to float, but to {s}",
+                        .{ case.input, @tagName(parsed) },
+                    );
+                    try expect(false);
+                }
+                try expectApproxEqRel(of, parsed.float);
+            },
+            .string => |os| {
+                if (parsed != .string) {
+                    std.log.err(
+                        "\"{s}\" did not parse to string, but to {s}",
+                        .{ case.input, @tagName(parsed) },
+                    );
+                    try expect(false);
+                }
+                try expectEqualStrings(os.value, parsed.string.value);
+            },
+            else => {
+                std.log.err(
+                    "parseVariable does not support {s}",
+                    .{@tagName(case.expected)},
+                );
+            },
         }
     }
 }
