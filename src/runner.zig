@@ -299,7 +299,7 @@ fn doSet(ctx: *Context, cmd: SetArgs) !void {
     const allowed_chars = strings.alphanumeric ++ "_-.";
     if (!strings.containsOnly(variable_name, allowed_chars)) {
         try ctx.ui.print(
-            "Invalid variable name \"{s}\", should only contain one of \"{s}\"",
+            "Invalid variable name \"{s}\", should only contain characters in \"{s}\"\n",
             .{ variable_name, allowed_chars },
         );
         return;
