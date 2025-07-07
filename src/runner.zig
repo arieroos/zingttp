@@ -284,7 +284,10 @@ fn doRequest(ctx: *Context, req: RequestExpr) !void {
 }
 
 fn doPrint(ctx: *Context, args: ArgList) !void {
-    const to_print = try resolveArguments(ctx, args);
+    const to_print = if (args.items.len == 0)
+        try ctx.variables.toStrAlloc(ctx.arena.allocator())
+    else
+        try resolveArguments(ctx, args);
     try ctx.ui.print("{s}\n", .{to_print});
 }
 

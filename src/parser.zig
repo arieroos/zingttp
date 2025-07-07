@@ -127,6 +127,9 @@ fn parsePrint(arguments: []TokenInfo, allocator: Allocator) !Expression {
         }
         return i;
     }
+    if (args.arg_count == 0) {
+        arg_buffer[0] = ArgList.init(allocator);
+    }
 
     return Expression{ .print = arg_buffer[0] };
 }
@@ -381,6 +384,15 @@ test "parse breaks on command without arg" {
     switch (expression) {
         .invalid => |inv| try expectEqualStrings("Missing value or variable at 3", inv),
         else => try (expect(false)),
+    }
+}
+
+test "parsePrint can parse 0 args" {
+    var expression = try parsePrint(&[_]TokenInfo{}, test_allocator);
+    defer expression.deinit(test_allocator);
+
+    for (expression.print.items) |_| {
+        try expect(false);
     }
 }
 
