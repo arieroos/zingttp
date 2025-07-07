@@ -472,7 +472,7 @@ test "stringifyMap" {
     const to_str = try m.toStrAlloc(test_alloc);
     defer test_alloc.free(to_str);
 
-    std.debug.print("\n{s}\n", .{to_str});
+    try expect(std.mem.containsAtLeast(u8, to_str, 1, "\tinner: {"));
 }
 
 test parseVariable {

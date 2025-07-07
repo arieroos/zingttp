@@ -367,7 +367,7 @@ test run {
 
 test "run can make a request and print the requested url" {
     const cmds = [_]String{
-        "GET https://jsonplaceholder.typicode.com/posts/1",
+        "GET http://localhost:9009",
         "PRINT Done",
         "PRINT Made' a '{{last_request.method}}' request to '{{ last_request.url }}",
     };
@@ -379,7 +379,7 @@ test "run can make a request and print the requested url" {
     const outputs = test_ui.testing.getOutputMsgs();
     try expect(outputs.len == 3);
     try expectStringStartsWith(outputs[1], "Done");
-    try expectStringStartsWith(outputs[2], "Made a GET request to https://jsonplaceholder.typicode.com/posts/1");
+    try expectStringStartsWith(outputs[2], "Made a GET request to http://localhost:9009");
 }
 
 test "run can set and print variables" {
@@ -617,6 +617,7 @@ test "Run print file" {
         "GET",
         "Hi mom! I made a \"GET\" request to https://jsonplaceholder.typicode.com/posts/1!",
         "\n",
+        "{\n\tlast_request: {",
     };
     try runFileTest("tests/print.zttp", expecteds);
 }

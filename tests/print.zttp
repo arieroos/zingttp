@@ -1,6 +1,6 @@
 # A test script to demonstrate how printing works
 
-# A print is always followed by an argument
+# A print is always followed by an argument. See "variables.zttp" for more examples.
 PRINT argument
 PRINT "literal argument"
 PRINT {{ variable }}
@@ -27,4 +27,9 @@ PRINT {{ .last_request..method. }}
 
 # Arguments can be concatenanted by not leaving space between them
 PRINT "Hi mom! I "made' a "'{{ last_request.method }}'" 'request' to '{{ last_request.url }}!
+
+# To Print an empty line, pass an empty literal
+PRINT ""
+# To Print the entire variable tree, pass nothing
+PRINT
 
