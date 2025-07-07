@@ -48,6 +48,9 @@ pub fn main() !void {
 
         var http_server = http.Server.init(conn, request_buffer);
         var req = try http_server.receiveHead();
+        errdefer req.respond("", .{ .status = http.Status.internal_server_error }) catch |err| {
+            stdout.print("Could not send error 500: {s}", .{@errorName(err)}) catch unreachable;
+        };
 
         try stdout.print("{s}\n", .{req.head.target});
 
@@ -56,12 +59,17 @@ pub fn main() !void {
             try stdout.print("{s}: {s}\n", .{ h.name, h.value });
         }
 
+        handleRoute(req.head.target);
+
         try req.respond("Hi daar slaaiblaar!", .{});
         try stdout.print("\n", .{});
     }
+}
 
-    // var server = http.Server.init(allocator, .{ .reuse_address = true });
-    // defer server.deinit();
+fn handleRoute(route: []const u8) void {
+    if (std.mem.containsAtLeast(u8, route, 1, "wait")) {
+        std.time.sleep(std.time.ns_per_s);
+    }
 }
 
 fn parseArgs(allocator: std.mem.Allocator) !Options {

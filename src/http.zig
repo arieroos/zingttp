@@ -297,10 +297,11 @@ pub const Client = struct {
             ErrReason.read,
         );
 
+        request.time_spent = timer.read();
         if (debug.isActive()) {
             const time_str = std.fmt.fmtDuration(request.time_spent);
             debug.println(
-                "Finsihed {s} request to {s} in {s}",
+                "Finished {s} request to {s} in {s}",
                 .{ request.method, request.url, time_str },
             );
         }
@@ -401,4 +402,15 @@ test "Request deinit works" {
 
     req.deinit();
     try expect(!std.testing.allocator_instance.detectLeaks());
+}
+
+test "timer works" {
+    var test_client = client(test_allocator);
+    defer test_client.deinit();
+
+    var req = try Request.init("GET", "http://localhost:9009/wait", test_allocator);
+    defer req.deinit();
+
+    test_client.do(&req, .{});
+    try expect(req.time_spent > 1000);
 }
