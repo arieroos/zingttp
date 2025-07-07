@@ -563,8 +563,11 @@ fn runFileTest(file_name: String, expected_lines: []const String) !void {
 
     const min = @min(outputs.len, expected_lines.len);
 
-    for (outputs[0..min], expected_lines[0..min]) |output, expected| {
-        try expectStringStartsWith(output, expected);
+    for (outputs[0..min], expected_lines[0..min], 0..) |output, expected, i| {
+        expectStringStartsWith(output, expected) catch |err| {
+            std.log.err("Occured at line {}", .{i});
+            return err;
+        };
     }
 
     if (expected_lines.len > min) {
@@ -620,4 +623,68 @@ test "Run print file" {
         "{\n\tlast_request: {",
     };
     try runFileTest("tests/print.zttp", expecteds);
+}
+
+test "Run variables file" {
+    const expecteds = &[_]String{
+        "Simple Example",
+        "---",
+        "some_value",
+        "---",
+        "Composition Examples",
+        "---",
+        "argument",
+        "double quoted literal",
+        "single quoted literal",
+        "some_value",
+        "single quoted: some_valuedirect",
+        "---",
+        "Variable Name Examples",
+        "---",
+        "example",
+        "Invalid variable name \"an invalid variable\",",
+        "valid_value",
+        "Error: Expected value or variable but found invalid at 6: ",
+        "{\n\tnested: nested_value\n}",
+        "nested_value",
+        "why would you do this?",
+        "---",
+        "Variable Type Examples",
+        "---",
+        "{\n",
+        "---",
+        "Value Composition Examples",
+        "---",
+        "nested_value example value some_value",
+        "{\n\t",
+        "---",
+        "Copy by Value Examples",
+        "---",
+        "original fields",
+        "    unchanged",
+        "    unchanged",
+        "copied fields",
+        "    changed",
+        "    changed",
+        "---",
+        "Override and Null Examples",
+        "---",
+        "Null values aren't printed",
+        "\n",
+        "\n",
+        "Unless they are members of a map",
+        "{\n",
+        "\n",
+        "512",
+        "{\n\t",
+        "\n",
+        "---",
+        "Special Variables",
+        "---",
+        "Received response 200 (OK):",
+        "text/html; charset",
+        "{\n\t",
+        "---",
+    };
+    try runFileTest("tests/variables.zttp", expecteds);
 }

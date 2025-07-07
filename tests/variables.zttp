@@ -1,6 +1,180 @@
 # A test script to demonstrate how variables work
 
+PRINT "Simple Example"
+PRINT "---"
 # A variable can be set with the SET command
-SET my_var "some value"
+# SET name [value]
+SET my_var some_value
 # And then accessed through a mustache template
 PRINT {{ my_var }}
+
+# --------------------------------------------------------------------------------
+SET sep "----------------------------------------------------------------"
+PRINT {{sep}}
+
+PRINT "Composition Examples"
+PRINT "---"
+# ZingTTP doesn't do literals like other languages, spaces separated values are always treated as separate arguments, unless they are quoted.
+# This allows for some powerful ways to compose arguments.
+# There are four ways to specify arguments:
+# 1. Direct:
+PRINT argument
+# 2. Quoted (either double or single quotes)
+PRINT "double quoted literal"
+PRINT 'single quoted literal'
+# 3. Referencing variables as mustache templates
+PRINT {{my_var}}
+# 4. Any combination of the above (as long as there are no unquoted spaces)
+PRINT 'single quoted: '{{my_var}}direct
+# --------------------------------------------------------------------------------
+PRINT {{sep}}
+
+PRINT "Variable Name Examples"
+PRINT "---"
+# Variable names can be composed
+SET {{my_var}}"_composed_"variable example
+PRINT {{some_value_composed_variable}}
+
+# Note that variables may only contain alphanumeric characters, underscores, dashes and dots.
+SET a_valid-variable valid_value
+SET "an invalid variable"
+PRINT {{a_valid-variable}}
+# Even the print command below is invalid
+PRINT {{an invalid variable}}
+
+# If the variable names contains a dot, it is treated as hierarchical data
+SET some_object.nested nested_value
+PRINT {{some_object}}
+PRINT {{some_object.nested}}
+# There is no theoretical limit too how deeply object may be nested.
+SET a.v.e.r.y.d.e.e.p.l.y.n.e.s.t.e.d.o.b.j.e.c.t "why would you do this?"
+PRINT {{a.v.e.r.y.d.e.e.p.l.y.n.e.s.t.e.d.o.b.j.e.c.t}}
+# --------------------------------------------------------------------------------
+PRINT {{sep}}
+
+PRINT "Variable Type Examples"
+PRINT "---"
+# There are 6 variable types
+# booleans
+SET types.boolean true
+# integers
+SET types.integer 986941
+# floats
+SET types.float -3.31e5
+# strings (the most common)
+SET types.string string_value
+# maps (aka objects, dictionaries etc.)
+SET types.map.field1 5
+SET types.map.field2 7
+# lists (aka arrays, lists etc.)
+# TODO: Example list
+PRINT {{types}}
+# --------------------------------------------------------------------------------
+PRINT {{sep}}
+
+PRINT "Value Composition Examples"
+PRINT "---"
+# The values of objects can also be composed
+SET composed_value {{some_object.nested}}" "example' value '{{my_var}}
+PRINT {{composed_value}}
+# With the following exceptions
+# 1. If the value is a singe variable, the variable will be copied
+SET example.copy {{some_object}}
+# 2. If the value can be parsed to an int or float (after being composed), it will be stored as such
+SET example.int.decimal 11
+SET example.int.binary 0b10
+SET example.int.binary_composed 0b{{example.int.decimal}}
+SET example.int.octal 0o74
+SET example.int.octal_composed 0o{{example.int.decimal}}
+SET example.int.hexadecimal 0xF4
+SET example.int.hexadecimal_composed 0x{{example.int.decimal}}
+SET example.float.no_exponent 42.7
+SET example.float.exponent 4.2e7
+# 3. If the composed value matches "true" or "false" (case insensitive), it will be stored as a bool
+SET example.boolean.false False
+SET example.boolean.true "Tr"Ue
+# 4. If a string is qouted after being composed, the quotes will be stripped, but only one layer
+SET example.string.dequoted_str "'hi'"
+SET example.string.quoted_str "''hi''"
+# this is nice for storing ints, floats, or booleans as strings
+SET example.string.not_an_int "'0b1001'"
+# 5. If the composed value matches "null" (case-insensitive), the value is set to null.
+SET example.null "n"uLl
+PRINT {{example}}
+# --------------------------------------------------------------------------------
+PRINT {{sep}}
+
+PRINT "Copy by Value Examples"
+PRINT "---"
+# When copying variables, the copies are always made by value, never by reference.
+SET original.obj1.field1 unchanged
+SET original.obj1.field2 unchanged
+SET original.field1 unchanged
+SET original.field2 unchanged
+
+SET copied {{original}}
+SET copied.obj1.field2 changed
+SET copied.field2 changed
+PRINT "original fields:"
+PRINT "    "{{original.obj1.field2}}
+PRINT "    "{{original.field2}}
+PRINT "copied fields:"
+PRINT "    "{{copied.obj1.field2}}
+PRINT "    "{{copied.field2}}
+# --------------------------------------------------------------------------------
+PRINT {{sep}}
+
+SET copied.obj2 {{copied.obj1}}
+
+PRINT "Override and Null Examples"
+PRINT "---"
+# ZingTTP has a concept of null.
+# Null values and undefined values are treated the same for most purposes.
+# Setting a value to null is the same as unsetting it.
+# This can be achieved by not passing a second paramater
+SET copied.field1
+# Or by passing NULL
+SET copied.field2 NULL
+PRINT "Null values aren't printed"
+PRINT {{copied.field1}}
+PRINT {{copied.field2}}
+PRINT "Unless they are members of a map"
+PRINT {{copied}}
+
+# Be careful when setting variables, ZingTTP will happily override anything that's already set
+SET copied.obj1
+PRINT {{copied.obj1}}
+SET copied.obj2 512
+PRINT {{copied.obj2}}
+PRINT {{copied}}
+SET copied
+PRINT {{copied}}
+
+# --------------------------------------------------------------------------------
+PRINT {{sep}}
+
+PRINT "Special Variables"
+PRINT "---"
+# When a request is made, ZingTTP will populate a special variable called "last_request".
+# This variable contains everything you might want to know about the request.
+# Including request and response headers etc.
+SET url "https://www.google.com/"
+GET {{url}}
+PRINT {{last_request.response.headers.content-type.0}}
+
+# You can still SET last_request or any of it's members
+SET last_request.response.body "[REDACTED]"
+SET last_request.response.headers
+
+# ZingTTP keeps all the variables in a global map.
+# This can be seen with the PRINT command without any arguments
+PRINT
+# --------------------------------------------------------------------------------
+PRINT {{sep}}
+
+EXIT
+
+# ZingTTP does not have any built-in garbage collection.
+# So every variable initialised will exists as long as the script is running.
+# Memory is automatically cleaned when a variable is overridden.
+
