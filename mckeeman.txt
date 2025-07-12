@@ -55,13 +55,14 @@ method
     "PATCH"
 
 do
-    DO space value space '{' '00A0' lines '}'
-    DO space value space loop space '{' '00A0' lines '}'
-    DO space value space if space '{' '00A0' lines '}'
+    DO space value block
+    DO space value space loop block
+    DO space value space if block
 
 loop
     "UNTIL" '(' expression ')'
     "WHILE" '(' expression ')'
+    "FOR" '(' expression ')'
 
 if
     "IF" '(' expression ')'
@@ -69,7 +70,7 @@ if
     ifelse if
 
 ifelse
-    if space ELSE space '{' '00A0' lines '}'
+    if space ELSE block
 
 exit
     "EXIT"
@@ -82,7 +83,10 @@ assert
     "ASSERT_FAILED"
     "ASSERT_CODE" space value
     "ASSERT_CONTAINS" space value space value
-    "ASSERT_ERROR" space value space '{' '00A0' lines '}'
+    "ASSERT_ERROR" block
+
+block
+    space '{' '00A0' lines '}'
 
 file
     "SCRIPT" space value
