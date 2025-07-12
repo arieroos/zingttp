@@ -1,32 +1,49 @@
 # https://www.crockford.com/mckeeman.html
 
+## Basic structure
+lines
+    line lines
+
 line
     comment '000A'
-    expression '000A'
-    expression comment '000A'
+    statement '000A'
+    statement comment '000A'
+    space line
 
 comment
     '#' anything
 
 anything
-    '0020' . '10FFF'
+    character
     anything anything
 
-expression
+statement
     ""
-    "EXIT"
-    "SET" space argument space argument
-    request
+    "SET" space value space value
     print
+    request
+    do
+    exit
+    "WAIT" space value
+    "ERROR" space value
+    assert
+    file
+    statement space
 
-request
-    method space argument
-
+## Statements
 print
     "PRINT"
-    "PRINT" space argument
+    "PRINT" space value
+
+request
+    method
+    method space value
+    method space value space value
+    method space value space '(' expression ')' space value
+    method space value space '(' expression ')' space value space '(' expression ')'
 
 method
+    "REQUEST"
     "GET"
     "POST"
     "PUT"
@@ -37,28 +54,75 @@ method
     "CONNECT"
     "PATCH"
 
-argument
-    variable
+do
+    DO space value space '{' '00A0' lines '}'
+    DO space value space loop space '{' '00A0' lines '}'
+    DO space value space if space '{' '00A0' lines '}'
+
+loop
+    "UNTIL" '(' expression ')'
+    "WHILE" '(' expression ')'
+
+if
+    "IF" '(' expression ')'
+    ifelse
+    ifelse if
+
+ifelse
+    if space ELSE space '{' '00A0' lines '}'
+
+exit
+    "EXIT"
+    "EXIT" space value
+
+assert
+    "ASSERT" space value
+    "ASSERT_SUCCESS"
+    "ASSERT_REDIRECT"
+    "ASSERT_FAILED"
+    "ASSERT_CODE" space value
+    "ASSERT_CONTAINS" space value space value
+    "ASSERT_ERROR" space value space '{' '00A0' lines '}'
+
+file
+    "SCRIPT" space value
+    "IMPORT" space value space value
+    "EXPORT" space value space value
+    "APPEND" space value space value
+    "REPORT" space value
+
+## Values
+
+value
     literal
-    characters
-    argument argument
+    quoted
+    '(' expression ')'
+    value value
 
-variable
-    "{{" space identifiers space "}}"
+literal
+    character - '0020' - '#' - '{' - '}' - ''' - '"' - '(' - ')'
+    literal literal
 
-space
-    '0020'
-    space space
+expression
+    '(' expression ')'
+    identifiers
+    quoted
+    operator expression
+    expression '00A0'
+    '00A0' expression
+    expression space
+    space expression
 
 identifiers
     identifier
     identifier '.' identifiers
+    '.' '.'
 
 identifier
     '_'
-    '-'
     alphanumeric
-    indentifier identifier
+    alphanumeric '-'
+    identifier identifier
 
 alphanumeric
     'a' . 'z'
@@ -66,7 +130,7 @@ alphanumeric
     '0' . '9'
     alphanumeric alphanumeric
 
-literal
+quoted
     ''' squoutables '''
     '"' dquoutables '''
 
@@ -75,21 +139,33 @@ squoutables
     squoutable squoutables
 
 squoutable
-    '0020' . '10FFF' - '''
+    '00A0'
+    character - '''
 
 dquoutables
     dquoutable
     dquoutable dquoutables
 
 dquoutable
-    '0020' . '10FFF' - '"'
-
-characters
-    '{'
-    '{' character characters
-    character
-    character characters
+    '00A0'
+    character - '"'
 
 character
-    '0021' . '10FFF' - '#' - '{' - ''' - '"'
+    '0020' . '007E'
+    '00A0' . 'FFFF'
+
+operator
+    '+'
+    '-'
+    '/'
+    '*'
+    '%'
+    '='
+    '!'
+    '|'
+    '&'
+    '^'
+space
+    '0020'
+    space space
 
