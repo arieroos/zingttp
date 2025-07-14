@@ -1,4 +1,5 @@
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 
 const strings = @import("strings.zig");
 const String = strings.String;
@@ -49,7 +50,7 @@ pub const Token = union(enum) {
     keyword: Keyword,
     literal: String,
     quoted: String,
-    identifiers: String,
+    identifiers: []const String,
     operator: u8,
 
     whitespace: usize,
@@ -66,8 +67,30 @@ pub const Token = union(enum) {
     }
 };
 
-pub const TokenInfo = struct { token: Token, lexeme: String, pos: usize, line: usize };
+pub const TokenInfo = struct {
+    token: Token,
+    lexeme: String,
+    pos: usize,
+    line: usize,
+    allocator: Allocator,
+
+    pub fn deinit(self: *TokenInfo) void {
+        switch (self.token) {
+            .identifiers => |i| self.allocator.free(i),
+            else => {},
+        }
+        self.allocator.free(self.lexeme);
+    }
+};
+
 pub const TokenList = std.ArrayList(TokenInfo);
+
+pub fn deinitTokenList(token_list: *TokenList) void {
+    for (token_list.items) |*i| {
+        i.deinit();
+    }
+    token_list.deinit();
+}
 
 const InvalidType = enum {
     empty_expression,
@@ -89,7 +112,7 @@ pub const operators = "+-/*%=!|&^";
 
 var scanner: Scanner = Scanner{};
 
-pub fn scan(line: String, allocator: std.mem.Allocator) !TokenList {
+pub fn scan(line: String, allocator: Allocator) !TokenList {
     var token_list = TokenList.init(allocator);
     try continueScan(line, &token_list);
     return token_list;
@@ -97,7 +120,7 @@ pub fn scan(line: String, allocator: std.mem.Allocator) !TokenList {
 
 pub fn continueScan(line: String, token_list: *TokenList) !void {
     scanner.newLine(line);
-    while (scanner.scanNextToken()) |token| {
+    while (try scanner.scanNextToken(test_allocator)) |token| {
         try token_list.append(token);
         switch (token.token) {
             .invalid => break,
@@ -144,42 +167,42 @@ const Scanner = struct {
         self.expression_level = 0;
     }
 
-    fn scanNextToken(self: *Scanner) ?TokenInfo {
+    fn scanNextToken(self: *Scanner, allocator: Allocator) !?TokenInfo {
         self.start = self.idx;
         self.skipSpaces();
         if (self.done() or self.current() == '#') {
             return null;
         }
         if (self.start > 0 and self.start < self.idx and self.expression_level == 0) {
-            return self.genTokenInfo(Token{ .whitespace = self.idx - self.start });
+            return try self.genTokenInfo(Token{ .whitespace = self.idx - self.start }, allocator);
         }
         self.start = self.idx;
 
         return switch (self.current()) {
             '#' => null,
-            '(', ')', '{', '}' => self.scanSingle(),
-            '"', '\'' => |c| self.scanQuoted(c),
-            else => if (self.expression_level == 0) self.scanWord() else self.scanExpression(),
+            '(', ')', '{', '}' => try self.scanSingle(allocator),
+            '"', '\'' => |c| try self.scanQuoted(c, allocator),
+            else => if (self.expression_level == 0) try self.scanWord(allocator) else try self.scanExpression(allocator),
         };
     }
 
-    fn scanSingle(self: *Scanner) TokenInfo {
+    fn scanSingle(self: *Scanner, allocator: Allocator) !TokenInfo {
         const c = self.current();
         self.advance();
         switch (c) {
             '(' => {
                 self.expression_level += 1;
-                return self.genTokenInfo(.{ .expression = true });
+                return try self.genTokenInfo(.{ .expression = true }, allocator);
             },
             ')' => {
                 if (self.expression_level == 0)
-                    return self.invalid(InvalidType.unexpected_expression_close);
+                    return try self.invalid(InvalidType.unexpected_expression_close, allocator);
 
                 self.expression_level -= 1;
-                return self.genTokenInfo(.{ .expression = false });
+                return try self.genTokenInfo(.{ .expression = false }, allocator);
             },
-            '{' => return self.genTokenInfo(.{ .subroutine = true }),
-            '}' => return self.genTokenInfo(.{ .subroutine = false }),
+            '{' => return try self.genTokenInfo(.{ .subroutine = true }, allocator),
+            '}' => return try self.genTokenInfo(.{ .subroutine = false }, allocator),
             else => std.debug.panic("Expected '{{', '}}', '(', or ')', but got '{c}'", .{c}),
         }
     }
@@ -190,7 +213,7 @@ const Scanner = struct {
         }
     }
 
-    fn scanQuoted(self: *Scanner, quote: u8) TokenInfo {
+    fn scanQuoted(self: *Scanner, quote: u8, allocator: Allocator) !TokenInfo {
         self.advance();
         while (self.current() != quote and !self.done()) {
             self.advance();
@@ -199,45 +222,81 @@ const Scanner = struct {
         if (self.current() == quote) {
             self.advance();
             const value = self.line[self.start + 1 .. self.idx - 1];
-            return self.genTokenInfo(Token{ .quoted = value });
+            const owned_lexeme = try strings.toOwned(self.lexeme(), allocator);
+            return try self.genTokenInfoOwned(Token{ .quoted = value }, owned_lexeme, allocator);
         } else {
-            return self.invalid(InvalidType.unclosed_quote);
+            return try self.invalid(InvalidType.unclosed_quote, allocator);
         }
     }
 
-    fn scanExpression(self: *Scanner) ?TokenInfo {
+    fn scanExpression(self: *Scanner, allocator: Allocator) !?TokenInfo {
         self.skipSpaces();
         const c = self.current();
-        if (c == ')') return self.invalid(InvalidType.empty_expression);
-        if (c == '(') return self.scanSingle();
+        if (c == ')') return try self.invalid(InvalidType.empty_expression, allocator);
+        if (c == '(') return try self.scanSingle(allocator);
         if (std.mem.containsAtLeastScalar(u8, strings.alphanumeric ++ "_.", 1, c))
-            return self.scanIdentifiers();
+            return try self.scanIdentifiers(allocator);
         if (c == '\'' or c == '"') {
-            const token = self.scanQuoted(c);
+            const token = try self.scanQuoted(c, allocator);
             self.skipSpaces();
             return token;
         }
         if (std.mem.containsAtLeastScalar(u8, operators, 1, c)) {
             self.advance();
-            return self.genTokenInfo(.{ .operator = c });
+            return try self.genTokenInfo(.{ .operator = c }, allocator);
         }
         if (c == '#') {
             return null;
         }
-        return self.invalid(InvalidType.invalid_expression);
+        return try self.invalid(InvalidType.invalid_expression, allocator);
     }
 
-    fn scanIdentifiers(self: *Scanner) TokenInfo {
+    fn scanIdentifiers(self: *Scanner, allocator: Allocator) !TokenInfo {
+        if (self.current() == '.') {
+            self.advance();
+        }
+        var parts: usize = 1;
+
         const valid_chars = strings.alphanumeric ++ "_.-";
         while (std.mem.containsAtLeastScalar(u8, valid_chars, 1, self.current())) {
             self.advance();
+            if (self.current() == '.') {
+                parts += 1;
+            }
         }
-        const token = self.genTokenInfo(.{ .identifiers = self.lexeme() });
+
+        const owned_lexeme = try strings.toOwned(self.lexeme(), allocator);
+
+        var start: usize = 0;
+        var end: usize = self.lexeme().len;
+        if (self.lexeme()[start] == '.') start += 1;
+        if (self.lexeme()[end - 1] == '.') {
+            end -= 1;
+            parts -= 1;
+        }
+
+        const identifiers = try if (strings.eql(owned_lexeme, "."))
+            splitIdentifiers("", 0, allocator)
+        else if (strings.eql(owned_lexeme, ".."))
+            splitIdentifiers(owned_lexeme[1..], 1, allocator)
+        else
+            splitIdentifiers(owned_lexeme[start..end], parts, allocator);
+
+        const token = self.genTokenInfoOwned(.{ .identifiers = identifiers }, owned_lexeme, allocator);
         self.skipSpaces();
         return token;
     }
 
-    fn scanWord(self: *Scanner) TokenInfo {
+    fn splitIdentifiers(value: String, size: usize, allocator: Allocator) ![]String {
+        var identifiers = try std.ArrayList(String).initCapacity(allocator, size);
+        var spliterator = std.mem.splitScalar(u8, value, '.');
+        while (spliterator.next()) |identifier| {
+            identifiers.appendAssumeCapacity(identifier);
+        }
+        return try identifiers.toOwnedSlice();
+    }
+
+    fn scanWord(self: *Scanner, allocator: Allocator) !TokenInfo {
         while (!self.done()) {
             self.advance();
             switch (self.current()) {
@@ -253,19 +312,30 @@ const Scanner = struct {
                 else => {},
             }
         }
+        const owned_lexeme = try strings.toOwned(self.lexeme(), allocator);
         const token = if (std.meta.stringToEnum(Keyword, self.lexeme())) |k|
             Token{ .keyword = k }
         else
             Token{ .literal = self.lexeme() };
-        return self.genTokenInfo(token);
+        return try self.genTokenInfoOwned(token, owned_lexeme, allocator);
     }
 
-    fn invalid(self: *Scanner, comptime t: InvalidType) TokenInfo {
-        return self.genTokenInfo(.{ .invalid = InvalidReason(t) });
+    fn invalid(self: *Scanner, comptime t: InvalidType, allocator: Allocator) !TokenInfo {
+        return self.genTokenInfo(.{ .invalid = InvalidReason(t) }, allocator);
     }
 
-    fn genTokenInfo(self: *Scanner, token: Token) TokenInfo {
-        return TokenInfo{ .lexeme = self.lexeme(), .pos = self.start, .line = self.line_number, .token = token };
+    fn genTokenInfo(self: *Scanner, token: Token, allocator: Allocator) !TokenInfo {
+        return self.genTokenInfoOwned(token, try strings.toOwned(self.lexeme(), allocator), allocator);
+    }
+
+    fn genTokenInfoOwned(self: *Scanner, token: Token, owned_lexeme: String, allocator: Allocator) !TokenInfo {
+        return TokenInfo{
+            .token = token,
+            .lexeme = owned_lexeme,
+            .pos = self.start,
+            .line = self.line_number,
+            .allocator = allocator,
+        };
     }
 };
 
@@ -336,10 +406,13 @@ fn expectTokenToBeQuotedAt(token: TokenInfo, value: String, position: usize) !vo
     }
 }
 
-fn expectTokenToBeIdAt(token: TokenInfo, value: String, position: usize) !void {
+fn expectTokenToBeIdAt(token: TokenInfo, value: []const String, position: usize) !void {
     switch (token.token) {
         .identifiers => |val| {
-            try expectEqualStrings(value, val);
+            try expect(value.len == val.len);
+            for (value, val) |exp, got| {
+                try expectEqualStrings(exp, got);
+            }
             try expectPos(position, token.pos);
         },
         else => {
@@ -408,14 +481,14 @@ fn expectTokenToBeBracketAt(actual: TokenInfo, expected: Token, position: usize)
 
 test scan {
     {
-        const tokens = try scan("EXIT", test_allocator);
-        defer tokens.deinit();
+        var tokens = try scan("EXIT", test_allocator);
+        defer deinitTokenList(&tokens);
         try expectTokenToBeKeywordAt(tokens.items[0], Keyword.EXIT, 0);
         try expect(tokens.items.len == 1);
     }
     {
-        const tokens = try scan("SET some_variable some_value", test_allocator);
-        defer tokens.deinit();
+        var tokens = try scan("SET some_variable some_value", test_allocator);
+        defer deinitTokenList(&tokens);
 
         try expectTokenToBeKeywordAt(tokens.items[0], Keyword.SET, 0);
         try expectTokenToBeLiteralAt(tokens.items[2], "some_variable", 4);
@@ -424,52 +497,52 @@ test scan {
     }
     {
         const test_val = "http://some_site.com/space=in url";
-        const tokens = try scan("PUT \"" ++ test_val ++ "\"", test_allocator);
-        defer tokens.deinit();
+        var tokens = try scan("PUT \"" ++ test_val ++ "\"", test_allocator);
+        defer deinitTokenList(&tokens);
 
         try expectTokenToBeKeywordAt(tokens.items[0], Keyword.PUT, 0);
         try expectTokenToBeQuotedAt(tokens.items[2], test_val, 4);
         try expect(tokens.items.len == 3);
     }
     {
-        const tokens = try scan("PRINT (some.variable)", test_allocator);
-        defer tokens.deinit();
+        var tokens = try scan("PRINT (some.variable)", test_allocator);
+        defer deinitTokenList(&tokens);
 
         try expectTokenToBeKeywordAt(tokens.items[0], Keyword.PRINT, 0);
-        try expectTokenToBeIdAt(tokens.items[3], "some.variable", 7);
+        try expectTokenToBeIdAt(tokens.items[3], &[_]String{ "some", "variable" }, 7);
         try expect(tokens.items.len == 5);
     }
     {
-        const tokens = try scan("DO context FUN some_function (some.variable) (another.variable)", test_allocator);
-        defer tokens.deinit();
+        var tokens = try scan("DO context FUN some_function (some.variable) (another.variable)", test_allocator);
+        defer deinitTokenList(&tokens);
 
         try expectTokenToBeKeywordAt(tokens.items[0], Keyword.DO, 0);
         try expectTokenToBeLiteralAt(tokens.items[2], "context", 3);
         try expectTokenToBeKeywordAt(tokens.items[4], Keyword.FUN, 11);
         try expectTokenToBeLiteralAt(tokens.items[6], "some_function", 15);
-        try expectTokenToBeIdAt(tokens.items[9], "some.variable", 30);
-        try expectTokenToBeIdAt(tokens.items[13], "another.variable", 46);
+        try expectTokenToBeIdAt(tokens.items[9], &[_]String{ "some", "variable" }, 30);
+        try expectTokenToBeIdAt(tokens.items[13], &[_]String{ "another", "variable" }, 46);
         try expect(tokens.items.len == 15);
     }
     {
-        const tokens = try scan("WAIT 1", test_allocator);
-        defer tokens.deinit();
+        var tokens = try scan("WAIT 1", test_allocator);
+        defer deinitTokenList(&tokens);
 
         try expectTokenToBeKeywordAt(tokens.items[0], Keyword.WAIT, 0);
         try expectTokenToBeLiteralAt(tokens.items[2], "1", 5);
         try expect(tokens.items.len == 3);
     }
     {
-        const tokens = try scan("ERROR some_error", test_allocator);
-        defer tokens.deinit();
+        var tokens = try scan("ERROR some_error", test_allocator);
+        defer deinitTokenList(&tokens);
 
         try expectTokenToBeKeywordAt(tokens.items[0], Keyword.ERROR, 0);
         try expectTokenToBeLiteralAt(tokens.items[2], "some_error", 6);
         try expect(tokens.items.len == 3);
     }
     {
-        const tokens = try scan("ASSERT true", test_allocator);
-        defer tokens.deinit();
+        var tokens = try scan("ASSERT true", test_allocator);
+        defer deinitTokenList(&tokens);
 
         try expectTokenToBeKeywordAt(tokens.items[0], Keyword.ASSERT, 0);
         try expectTokenToBeLiteralAt(tokens.items[2], "true", 7);
@@ -486,7 +559,7 @@ test continueScan {
             ")",
         };
         var tokens = TokenList.init(test_allocator);
-        defer tokens.deinit();
+        defer deinitTokenList(&tokens);
 
         for (lines) |line| {
             try continueScan(line, &tokens);
@@ -510,7 +583,7 @@ test continueScan {
             "}",
         };
         var tokens = TokenList.init(test_allocator);
-        defer tokens.deinit();
+        defer deinitTokenList(&tokens);
 
         for (lines) |line| {
             try continueScan(line, &tokens);
@@ -520,7 +593,7 @@ test continueScan {
         try expectTokenToBeLiteralAt(tokens.items[2], "context", 3);
         try expectTokenToBeKeywordAt(tokens.items[4], Keyword.IF, 11);
         try expectTokenToBeBracketAt(tokens.items[5], .{ .expression = true }, 13);
-        try expectTokenToBeIdAt(tokens.items[6], "var1", 14);
+        try expectTokenToBeIdAt(tokens.items[6], &[_]String{"var1"}, 14);
         try expectTokenToBeOpAt(tokens.items[7], '=', 19);
         try expectTokenToBeBracketAt(tokens.items[9], .{ .expression = false }, 22);
         try expectTokenToBeBracketAt(tokens.items[11], .{ .subroutine = true }, 24);
@@ -544,7 +617,7 @@ test continueScan {
             "}",
         };
         var tokens = TokenList.init(test_allocator);
-        defer tokens.deinit();
+        defer deinitTokenList(&tokens);
 
         for (lines) |line| {
             try continueScan(line, &tokens);
@@ -565,10 +638,10 @@ test continueScan {
 test "scan ignores spaces" {
     var tokens = try scan("      ", test_allocator);
     try expect(tokens.items.len == 0);
-    tokens.deinit();
+    deinitTokenList(&tokens);
 
     tokens = try scan("   DELETE     someURL  ", test_allocator);
-    defer tokens.deinit();
+    defer deinitTokenList(&tokens);
     try expect(tokens.items.len == 3);
     try expect(tokens.items[0].pos == 3);
     try expect(tokens.items[2].pos == 14);
@@ -577,8 +650,8 @@ test "scan ignores spaces" {
 test "scan works with long strings" {
     const str = "This_is_a_very_long_string,_it_must_have_at_least_128_characters_in_my_opinions,_though_121_should_be_fine_too!JustMakeSureItIsVeryLong...";
 
-    const tokens = try scan("CONNECT " ++ str, test_allocator);
-    defer tokens.deinit();
+    var tokens = try scan("CONNECT " ++ str, test_allocator);
+    defer deinitTokenList(&tokens);
 
     try expectStringStartsWith(tokens.items[2].token.literal, "This_is_a_very_long_strin");
 }
@@ -599,8 +672,8 @@ test "scan stops at comment" {
         TestCase{ .tst = "#GET http://somesite.com", .exp = 0 },
     };
     for (tests) |case| {
-        const tokens = try scan(case.tst, test_allocator);
-        defer tokens.deinit();
+        var tokens = try scan(case.tst, test_allocator);
+        defer deinitTokenList(&tokens);
 
         if (tokens.items.len == case.exp) {
             try expect(true);
@@ -620,7 +693,7 @@ test "scan correctly scans values" {
         .{ .tst = "\"string value\"", .exp = &[_]Token{.{ .quoted = "string value" }} },
         .{ .tst = "(expression)", .exp = &[_]Token{
             .{ .expression = true },
-            .{ .identifiers = "expression" },
+            .{ .identifiers = &[_]String{"expression"} },
             .{ .expression = false },
         } },
         .{ .tst = "('string in expression')", .exp = &[_]Token{
@@ -634,14 +707,14 @@ test "scan correctly scans values" {
         } },
         .{ .tst = "(multiline  # Some comment", .exp = &[_]Token{
             .{ .expression = true },
-            .{ .identifiers = "multiline" },
+            .{ .identifiers = &[_]String{"multiline"} },
         } },
         .{ .tst = "(\"nested\" + (expression))", .exp = &[_]Token{
             .{ .expression = true },
             .{ .quoted = "nested" },
             .{ .operator = '+' },
             .{ .expression = true },
-            .{ .identifiers = "expression" },
+            .{ .identifiers = &[_]String{"expression"} },
             .{ .expression = false },
             .{ .expression = false },
         } },
@@ -655,7 +728,7 @@ test "scan correctly scans values" {
     inline for (cases) |case| {
         scanner.reset();
         var tokens = try scan(case.tst, test_allocator);
-        defer tokens.deinit();
+        defer deinitTokenList(&tokens);
 
         if (tokens.items.len == case.exp.len) {
             try expect(true);
@@ -682,11 +755,7 @@ test "scan correctly scans values" {
                     try expect(got_token.token.expression == e);
                 },
                 .identifiers => |i| {
-                    if (got_token.token != .identifiers) {
-                        std.log.err("\"{s}\": Expected identifier, got {s}", .{ case.tst, @tagName(got_token.token) });
-                        try expect(false);
-                    }
-                    try expectEqualStrings(i, got_token.token.identifiers);
+                    try expectTokenToBeIdAt(got_token, i, got_token.pos);
                 },
                 .operator => |o| {
                     try expect(got_token.token == .operator);
@@ -714,7 +783,7 @@ test "scan correctly scans consecutive values" {
 
     inline for (test_lines) |line| {
         var tokens = try scan(line, test_allocator);
-        defer tokens.clearAndFree();
+        defer deinitTokenList(&tokens);
 
         if (tokens.items.len != 5) {
             std.log.err(
@@ -726,7 +795,8 @@ test "scan correctly scans consecutive values" {
 
         for (tokens.items) |token| {
             switch (token.token) {
-                .literal, .quoted, .identifiers => |v| try expectStringStartsWith(v, "some"),
+                .literal, .quoted => |v| try expectStringStartsWith(v, "some"),
+                .identifiers => |i| try expectStringStartsWith(i[0], "some"),
                 .expression => {},
                 else => {
                     std.log.err(
@@ -753,9 +823,9 @@ test "scan correctly scans asserts" {
 
     inline for (cases) |case| {
         var token_list = try scan(case.tst, test_allocator);
-        defer token_list.deinit();
+        defer deinitTokenList(&token_list);
 
-        const tokens = token_list.items;
+        var tokens = token_list.items;
         try expect(tokens[0].token == .keyword);
         try expect(tokens[0].token.keyword == case.kw);
 
@@ -783,9 +853,9 @@ test "scan correctly scans file operations" {
 
     inline for (cases) |case| {
         var token_list = try scan(case.tst, test_allocator);
-        defer token_list.deinit();
+        defer deinitTokenList(&token_list);
 
-        const tokens = token_list.items;
+        var tokens = token_list.items;
         try expect(tokens[0].token == .keyword);
         try expect(tokens[0].token.keyword == case.kw);
 
@@ -805,7 +875,8 @@ test "scan correctly scans file operations" {
 test "Scanner.scanNextToken scans single token" {
     const test_str = "hgl";
     var test_scanner = Scanner{ .line = test_str };
-    const token = test_scanner.scanNextToken();
+    var token = try test_scanner.scanNextToken(test_allocator);
+    defer token.?.deinit();
 
     try expectTokenToBeLiteralAt(token.?, "hgl", 0);
 }
@@ -814,7 +885,8 @@ test "Scanner.scanNextToken scans second token" {
     const test_str = "012 456 89";
 
     var test_scanner = Scanner{ .line = test_str, .idx = 4 };
-    const token = test_scanner.scanNextToken();
+    var token = try test_scanner.scanNextToken(test_allocator);
+    defer token.?.deinit();
 
     try expectTokenToBeLiteralAt(token.?, "456", 4);
 }
@@ -822,7 +894,8 @@ test "Scanner.scanNextToken scans second token" {
 test "Scanner.scanNextToken scans entire quote" {
     const test_str = "\"12 45\"";
     var test_scanner = Scanner{ .line = test_str };
-    const token = test_scanner.scanNextToken();
+    var token = try test_scanner.scanNextToken(test_allocator);
+    defer token.?.deinit();
 
     try expectTokenToBeQuotedAt(token.?, "12 45", 0);
 }
@@ -830,16 +903,36 @@ test "Scanner.scanNextToken scans entire quote" {
 test "Scanner.scanNextToken scans expression" {
     const test_str = "(12a45)";
     var test_scanner = Scanner{ .line = test_str };
-    _ = test_scanner.scanNextToken();
-    const token = test_scanner.scanNextToken();
+    var token = try test_scanner.scanNextToken(test_allocator);
+    token.?.deinit();
+    token = try test_scanner.scanNextToken(test_allocator);
+    defer token.?.deinit();
 
-    try expectTokenToBeIdAt(token.?, "12a45", 1);
+    try expectTokenToBeIdAt(token.?, &[_]String{"12a45"}, 1);
 }
 
 test "Scanner.scanQuoted scans inside quote" {
     const test_str = "'12 45'7";
     var test_scanner = Scanner{ .line = test_str };
-    const token = test_scanner.scanQuoted(test_str[0]);
+    var token = try test_scanner.scanQuoted(test_str[0], test_allocator);
+    defer token.deinit();
 
     try expectTokenToBeQuotedAt(token, "12 45", 0);
+}
+
+test "Scanner.scanIdentifiers scans multiple identifiers" {
+    const cases = &[_]struct { tst: String, expected: []const String }{};
+    var test_scanner = Scanner{};
+
+    inline for (cases) |case| {
+        scanner.newLine(case.tst);
+        var token = try try test_scanner.scanIdentifiers(test_allocator);
+        defer token.deinit();
+
+        try expect(token.token == .identifiers);
+        try expect(case.expected.len == token.token.identifiers.len);
+        for (case.expected, token.token.identifiers) |expected_id, got_id| {
+            try expectEqualStrings(expected_id, got_id);
+        }
+    }
 }

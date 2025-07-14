@@ -234,7 +234,7 @@ fn parseArgs(tokens: []TokenInfo, arg_buffer: []Values, allocator: Allocator) !G
                 arg_buffer[idx] = Values.init(allocator);
             },
             inline .literal, .quoted => |v| try arg_buffer[idx].append(Value{ .value = v }),
-            .identifiers => |v| try arg_buffer[idx].append(Value{ .variable = v }),
+            .identifiers => |v| try arg_buffer[idx].append(Value{ .variable = v[0] }),
             .expression => continue,
             else => {
                 return GetArgResult.initInvalid(idx + 1, token, allocator);
@@ -280,9 +280,10 @@ fn genTestTokenList(tokens: []const Token) !TokenList {
             .operator => |o| if (strings.indexOfScalar(scanner.operators, o)) |i| scanner.operators[i .. i + 1] else return error.InvalidOperator,
             .expression => |e| if (e) "(" else ")",
             .subroutine => |s| if (s) "{" else "}",
+            .identifiers => |i| if (i.len > 0) i[0] else "",
             inline else => |v| v,
         };
-        try tokenList.append(TokenInfo{ .token = token, .lexeme = lexeme, .pos = lengthSoFar, .line = 0 });
+        try tokenList.append(TokenInfo{ .token = token, .lexeme = lexeme, .pos = lengthSoFar, .line = 0, .allocator = test_allocator });
 
         lengthSoFar += lexeme.len;
     }
@@ -353,7 +354,7 @@ test parse {
             Token{ .keyword = Keyword.PRINT },
             Token{ .whitespace = 1 },
             Token{ .literal = "gg" },
-            Token{ .identifiers = "some.variable" },
+            Token{ .identifiers = &[_]String{ "some", "variable" } },
             Token{ .quoted = "ggg" },
         });
         defer tokens.deinit();
@@ -371,7 +372,7 @@ test parse {
             Token{ .whitespace = 1 },
             Token{ .literal = "gg" },
             Token{ .whitespace = 1 },
-            Token{ .identifiers = "some.variable" },
+            Token{ .identifiers = &[_]String{ "some", "variable" } },
             Token{ .literal = ".literal" },
         });
         defer tokens.deinit();
@@ -450,7 +451,7 @@ test "parseArgs can do invalids" {
         try genTestTokenList(&[_]Token{
             Token{ .literal = "some value" },
             Token{ .whitespace = 2 },
-            Token{ .identifiers = "some variable" },
+            Token{ .identifiers = &[_]String{"some variable"} },
         }),
     };
 
