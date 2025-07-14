@@ -234,7 +234,7 @@ fn parseArgs(tokens: []TokenInfo, arg_buffer: []ArgList, allocator: Allocator) !
                 arg_buffer[idx] = ArgList.init(allocator);
             },
             inline .literal, .quoted => |v| try arg_buffer[idx].append(Argument{ .value = v }),
-            .identifier => |v| try arg_buffer[idx].append(Argument{ .variable = v }),
+            .identifiers => |v| try arg_buffer[idx].append(Argument{ .variable = v }),
             .expression => continue,
             else => {
                 return GetArgResult.initInvalid(idx + 1, token, allocator);
@@ -353,7 +353,7 @@ test parse {
             Token{ .keyword = Keyword.PRINT },
             Token{ .whitespace = 1 },
             Token{ .literal = "gg" },
-            Token{ .identifier = "some.variable" },
+            Token{ .identifiers = "some.variable" },
             Token{ .quoted = "ggg" },
         });
         defer tokens.deinit();
@@ -371,7 +371,7 @@ test parse {
             Token{ .whitespace = 1 },
             Token{ .literal = "gg" },
             Token{ .whitespace = 1 },
-            Token{ .identifier = "some.variable" },
+            Token{ .identifiers = "some.variable" },
             Token{ .literal = ".literal" },
         });
         defer tokens.deinit();
@@ -450,7 +450,7 @@ test "parseArgs can do invalids" {
         try genTestTokenList(&[_]Token{
             Token{ .literal = "some value" },
             Token{ .whitespace = 2 },
-            Token{ .identifier = "some variable" },
+            Token{ .identifiers = "some variable" },
         }),
     };
 

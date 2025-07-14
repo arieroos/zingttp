@@ -49,7 +49,7 @@ pub const Token = union(enum) {
     keyword: Keyword,
     literal: String,
     quoted: String,
-    identifier: String,
+    identifiers: String,
     operator: u8,
 
     whitespace: usize,
@@ -232,7 +232,7 @@ const Scanner = struct {
         while (std.mem.containsAtLeastScalar(u8, valid_chars, 1, self.current())) {
             self.advance();
         }
-        const token = self.genTokenInfo(.{ .identifier = self.lexeme() });
+        const token = self.genTokenInfo(.{ .identifiers = self.lexeme() });
         self.skipSpaces();
         return token;
     }
@@ -338,7 +338,7 @@ fn expectTokenToBeQuotedAt(token: TokenInfo, value: String, position: usize) !vo
 
 fn expectTokenToBeIdAt(token: TokenInfo, value: String, position: usize) !void {
     switch (token.token) {
-        .identifier => |val| {
+        .identifiers => |val| {
             try expectEqualStrings(value, val);
             try expectPos(position, token.pos);
         },
@@ -620,7 +620,7 @@ test "scan correctly scans values" {
         .{ .tst = "\"string value\"", .exp = &[_]Token{.{ .quoted = "string value" }} },
         .{ .tst = "(expression)", .exp = &[_]Token{
             .{ .expression = true },
-            .{ .identifier = "expression" },
+            .{ .identifiers = "expression" },
             .{ .expression = false },
         } },
         .{ .tst = "('string in expression')", .exp = &[_]Token{
@@ -634,14 +634,14 @@ test "scan correctly scans values" {
         } },
         .{ .tst = "(multiline  # Some comment", .exp = &[_]Token{
             .{ .expression = true },
-            .{ .identifier = "multiline" },
+            .{ .identifiers = "multiline" },
         } },
         .{ .tst = "(\"nested\" + (expression))", .exp = &[_]Token{
             .{ .expression = true },
             .{ .quoted = "nested" },
             .{ .operator = '+' },
             .{ .expression = true },
-            .{ .identifier = "expression" },
+            .{ .identifiers = "expression" },
             .{ .expression = false },
             .{ .expression = false },
         } },
@@ -681,12 +681,12 @@ test "scan correctly scans values" {
                     try expect(got_token.token == .expression);
                     try expect(got_token.token.expression == e);
                 },
-                .identifier => |i| {
-                    if (got_token.token != .identifier) {
+                .identifiers => |i| {
+                    if (got_token.token != .identifiers) {
                         std.log.err("\"{s}\": Expected identifier, got {s}", .{ case.tst, @tagName(got_token.token) });
                         try expect(false);
                     }
-                    try expectEqualStrings(i, got_token.token.identifier);
+                    try expectEqualStrings(i, got_token.token.identifiers);
                 },
                 .operator => |o| {
                     try expect(got_token.token == .operator);
@@ -726,7 +726,7 @@ test "scan correctly scans consecutive values" {
 
         for (tokens.items) |token| {
             switch (token.token) {
-                .literal, .quoted, .identifier => |v| try expectStringStartsWith(v, "some"),
+                .literal, .quoted, .identifiers => |v| try expectStringStartsWith(v, "some"),
                 .expression => {},
                 else => {
                     std.log.err(
