@@ -10,34 +10,34 @@ const Token = scanner.Token;
 const TokenInfo = scanner.TokenInfo;
 const TokenList = scanner.TokenList;
 
-pub const Argument = union(enum) {
+pub const Value = union(enum) {
     value: String,
     variable: String,
 };
 
-pub const ArgList = std.ArrayList(Argument);
+pub const Values = std.ArrayList(Value);
 
 pub const Request = struct {
     method: String,
-    arguments: ArgList,
+    value: Values,
 };
 
 pub const SetArgs = struct {
-    variable: ArgList,
-    value: ArgList,
+    variable: Values,
+    value: Values,
 };
 
 pub const Expression = union(enum) {
     nothing: void,
     exit: void,
     request: Request,
-    print: ArgList,
+    print: Values,
     set: SetArgs,
     invalid: String,
 
     pub fn deinit(self: *Expression, allocator: Allocator) void {
         switch (self.*) {
-            .request => |*r| r.arguments.clearAndFree(),
+            .request => |*r| r.value.clearAndFree(),
             .set => |*s| {
                 s.value.clearAndFree();
                 s.variable.clearAndFree();
@@ -124,7 +124,7 @@ fn parseExit(arguments: []TokenInfo, allocator: Allocator) Expression {
 }
 
 fn parsePrint(arguments: []TokenInfo, allocator: Allocator) !Expression {
-    var arg_buffer: [1]ArgList = undefined;
+    var arg_buffer: [1]Values = undefined;
     const args = try parseArgs(arguments, &arg_buffer, allocator);
     if (args.invalid) |i| {
         for (arg_buffer[0..args.arg_count]) |*a| {
@@ -133,14 +133,14 @@ fn parsePrint(arguments: []TokenInfo, allocator: Allocator) !Expression {
         return i;
     }
     if (args.arg_count == 0) {
-        arg_buffer[0] = ArgList.init(allocator);
+        arg_buffer[0] = Values.init(allocator);
     }
 
     return Expression{ .print = arg_buffer[0] };
 }
 
 fn parseSet(token: TokenInfo, arguments: []TokenInfo, allocator: Allocator) !Expression {
-    var arg_buffer: [2]ArgList = undefined;
+    var arg_buffer: [2]Values = undefined;
     const args = try parseArgs(arguments, &arg_buffer, allocator);
     if (args.invalid) |i| {
         for (arg_buffer[0..args.arg_count]) |*a| {
@@ -160,12 +160,12 @@ fn parseSet(token: TokenInfo, arguments: []TokenInfo, allocator: Allocator) !Exp
         );
     }
 
-    const value_args = if (args.arg_count == 2) arg_buffer[1] else ArgList.init(allocator);
+    const value_args = if (args.arg_count == 2) arg_buffer[1] else Values.init(allocator);
     return Expression{ .set = .{ .variable = arg_buffer[0], .value = value_args } };
 }
 
 fn parseMethod(token: TokenInfo, arguments: []TokenInfo, allocator: Allocator) !Expression {
-    var arg_buffer: [1]ArgList = undefined;
+    var arg_buffer: [1]Values = undefined;
     const args = try parseArgs(arguments, &arg_buffer, allocator);
     if (args.invalid) |i| {
         for (arg_buffer[0..args.arg_count]) |*a| {
@@ -177,7 +177,7 @@ fn parseMethod(token: TokenInfo, arguments: []TokenInfo, allocator: Allocator) !
     return if (args.arg_count == 1 and arg_buffer[0].items.len > 0)
         Expression{ .request = .{
             .method = @tagName(token.token.keyword),
-            .arguments = arg_buffer[0],
+            .value = arg_buffer[0],
         } }
     else
         genInvalidExpression(
@@ -211,7 +211,7 @@ const GetArgResult = struct {
     }
 };
 
-fn parseArgs(tokens: []TokenInfo, arg_buffer: []ArgList, allocator: Allocator) !GetArgResult {
+fn parseArgs(tokens: []TokenInfo, arg_buffer: []Values, allocator: Allocator) !GetArgResult {
     if (tokens.len == 0) {
         return GetArgResult{ .arg_count = 0 };
     }
@@ -219,7 +219,7 @@ fn parseArgs(tokens: []TokenInfo, arg_buffer: []ArgList, allocator: Allocator) !
         .whitespace => {},
         else => return GetArgResult.initInvalid(0, tokens[0], allocator),
     }
-    arg_buffer[0] = ArgList.init(allocator);
+    arg_buffer[0] = Values.init(allocator);
 
     const max_args = arg_buffer.len;
     var idx: usize = 0;
@@ -231,10 +231,10 @@ fn parseArgs(tokens: []TokenInfo, arg_buffer: []ArgList, allocator: Allocator) !
                     return GetArgResult.initInvalid(idx, token, allocator);
 
                 std.debug.assert(idx < max_args);
-                arg_buffer[idx] = ArgList.init(allocator);
+                arg_buffer[idx] = Values.init(allocator);
             },
-            inline .literal, .quoted => |v| try arg_buffer[idx].append(Argument{ .value = v }),
-            .identifiers => |v| try arg_buffer[idx].append(Argument{ .variable = v }),
+            inline .literal, .quoted => |v| try arg_buffer[idx].append(Value{ .value = v }),
+            .identifiers => |v| try arg_buffer[idx].append(Value{ .variable = v }),
             .expression => continue,
             else => {
                 return GetArgResult.initInvalid(idx + 1, token, allocator);
@@ -290,7 +290,7 @@ fn genTestTokenList(tokens: []const Token) !TokenList {
     return tokenList;
 }
 
-fn expectArgumentAt(args: ArgList, idx: usize, val: String) !void {
+fn expectArgumentAt(args: Values, idx: usize, val: String) !void {
     try expect(args.items.len > idx);
     const arg = args.items[idx];
 
@@ -330,7 +330,7 @@ test parse {
         defer expression.deinit(test_allocator);
 
         try expectEqualStrings("POST", expression.request.method);
-        try expectArgumentAt(expression.request.arguments, 0, "http://some_url.com");
+        try expectArgumentAt(expression.request.value, 0, "http://some_url.com");
     }
     {
         var tokens = try genTestTokenList(&[_]Token{
@@ -417,7 +417,7 @@ test "parseArgs parses args" {
     });
     defer tokens.deinit();
 
-    var args_buffer: [2]ArgList = undefined;
+    var args_buffer: [2]Values = undefined;
     var args = try parseArgs(tokens.items, &args_buffer, test_allocator);
     defer for (0..args.arg_count) |i| {
         args_buffer[i].clearAndFree();
@@ -457,7 +457,7 @@ test "parseArgs can do invalids" {
     inline for (cases) |tokens| {
         defer tokens.deinit();
 
-        var args_buffer: [2]ArgList = undefined;
+        var args_buffer: [2]Values = undefined;
         const args = try parseArgs(tokens.items, &args_buffer, test_allocator);
         defer for (0..args.arg_count) |i| {
             args_buffer[i].clearAndFree();

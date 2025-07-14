@@ -10,7 +10,7 @@ const debug = @import("debug.zig");
 const scanner = @import("scanner.zig");
 const parser = @import("parser.zig");
 const RequestExpr = parser.Request;
-const ArgList = parser.ArgList;
+const ArgList = parser.Values;
 const SetArgs = parser.SetArgs;
 
 const variables = @import("variables.zig");
@@ -258,7 +258,7 @@ pub fn run(ui: *UserInterface, allocator: Allocator) !void {
 }
 
 fn doRequest(ctx: *Context, req: RequestExpr) !void {
-    const url = try resolveArguments(ctx, req.arguments);
+    const url = try resolveArguments(ctx, req.value);
 
     var result = try http.Request.init(req.method, url, ctx.arena.allocator());
     defer result.deinit();
@@ -482,7 +482,7 @@ test "Context.resolveVariable resolves request variables" {
     }
 }
 
-fn makeTestArgList(args: []const parser.Argument) !ArgList {
+fn makeTestArgList(args: []const parser.Value) !ArgList {
     var arg_list = try ArgList.initCapacity(test_alloc, args.len);
     arg_list.appendSliceAssumeCapacity(args);
     return arg_list;
@@ -492,9 +492,9 @@ test "doSet sets variables" {
     var ctx = try makeTestCtx();
     defer ctx.deinit();
 
-    var var_name_1 = try makeTestArgList(&[_]parser.Argument{.{ .value = "test_var" }});
+    var var_name_1 = try makeTestArgList(&[_]parser.Value{.{ .value = "test_var" }});
     defer var_name_1.clearAndFree();
-    var var_1 = try makeTestArgList(&[_]parser.Argument{.{ .value = "1" }});
+    var var_1 = try makeTestArgList(&[_]parser.Value{.{ .value = "1" }});
     defer var_1.clearAndFree();
 
     try doSet(&ctx, .{ .variable = var_name_1, .value = var_1 });
@@ -510,7 +510,7 @@ test "resolveArguments resolves arguments" {
 
     try ctx.updateLastResponse(resp);
 
-    const args = [_]parser.Argument{
+    const args = [_]parser.Value{
         .{ .value = "Made" },
         .{ .value = " a " },
         .{ .variable = "last_request.method" },
