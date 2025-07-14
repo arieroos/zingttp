@@ -101,6 +101,11 @@ pub fn parse(tokenList: TokenList, allocator: Allocator) !Expression {
         .TRACE,
         .CONNECT,
         => parseMethod(tokens[0], arguments, allocator),
+        else => genInvalidExpression(
+            InvalidReason.UnexpectedToken,
+            .{ .pos = 0, .lexeme = tokens[0].lexeme },
+            allocator,
+        ),
     };
 }
 
@@ -228,8 +233,9 @@ fn parseArgs(tokens: []TokenInfo, arg_buffer: []ArgList, allocator: Allocator) !
                 std.debug.assert(idx < max_args);
                 arg_buffer[idx] = ArgList.init(allocator);
             },
-            .value => |v| try arg_buffer[idx].append(Argument{ .value = v }),
-            .variable => |v| try arg_buffer[idx].append(Argument{ .variable = v }),
+            inline .literal, .quoted => |v| try arg_buffer[idx].append(Argument{ .value = v }),
+            .identifier => |v| try arg_buffer[idx].append(Argument{ .variable = v }),
+            .expression => continue,
             else => {
                 return GetArgResult.initInvalid(idx + 1, token, allocator);
             },
@@ -271,9 +277,12 @@ fn genTestTokenList(tokens: []const Token) !TokenList {
         const lexeme = switch (token) {
             .keyword => @tagName(token.keyword),
             .whitespace => " ",
+            .operator => |o| if (strings.indexOfScalar(scanner.operators, o)) |i| scanner.operators[i .. i + 1] else return error.InvalidOperator,
+            .expression => |e| if (e) "(" else ")",
+            .subroutine => |s| if (s) "{" else "}",
             inline else => |v| v,
         };
-        try tokenList.append(TokenInfo{ .token = token, .lexeme = lexeme, .pos = lengthSoFar });
+        try tokenList.append(TokenInfo{ .token = token, .lexeme = lexeme, .pos = lengthSoFar, .line = 0 });
 
         lengthSoFar += lexeme.len;
     }
@@ -313,7 +322,7 @@ test parse {
         var postExprTokens = try genTestTokenList(&[_]Token{
             Token{ .keyword = Keyword.POST },
             Token{ .whitespace = 1 },
-            Token{ .value = "http://some_url.com" },
+            Token{ .literal = "http://some_url.com" },
         });
         defer postExprTokens.deinit();
 
@@ -327,7 +336,7 @@ test parse {
         var tokens = try genTestTokenList(&[_]Token{
             Token{ .keyword = Keyword.EXIT },
             Token{ .whitespace = 1 },
-            Token{ .value = "gg" },
+            Token{ .literal = "gg" },
         });
         defer tokens.deinit();
 
@@ -343,8 +352,9 @@ test parse {
         var tokens = try genTestTokenList(&[_]Token{
             Token{ .keyword = Keyword.PRINT },
             Token{ .whitespace = 1 },
-            Token{ .value = "gg" },
-            Token{ .variable = "some.variable" },
+            Token{ .literal = "gg" },
+            Token{ .identifier = "some.variable" },
+            Token{ .quoted = "ggg" },
         });
         defer tokens.deinit();
 
@@ -353,15 +363,16 @@ test parse {
 
         try expectArgumentAt(expression.print, 0, "gg");
         try expectArgumentAt(expression.print, 1, "some.variable");
+        try expectArgumentAt(expression.print, 2, "ggg");
     }
     {
         var tokens = try genTestTokenList(&[_]Token{
             Token{ .keyword = Keyword.SET },
             Token{ .whitespace = 1 },
-            Token{ .value = "gg" },
+            Token{ .literal = "gg" },
             Token{ .whitespace = 1 },
-            Token{ .variable = "some.variable" },
-            Token{ .value = ".value" },
+            Token{ .identifier = "some.variable" },
+            Token{ .literal = ".literal" },
         });
         defer tokens.deinit();
 
@@ -370,7 +381,7 @@ test parse {
 
         try expectArgumentAt(expression.set.variable, 0, "gg");
         try expectArgumentAt(expression.set.value, 0, "some.variable");
-        try expectArgumentAt(expression.set.value, 1, ".value");
+        try expectArgumentAt(expression.set.value, 1, ".literal");
     }
 }
 
@@ -399,17 +410,20 @@ test "parsePrint can parse 0 args" {
 test "parseArgs parses args" {
     var tokens = try genTestTokenList(&[_]Token{
         Token{ .whitespace = 1 },
-        Token{ .value = "PUT" },
-        Token{ .value = "some value" },
+        Token{ .literal = "PUT" },
+        Token{ .quoted = "some value" },
         Token{ .whitespace = 2 },
-        Token{ .variable = "a.variable" },
+        Token{ .literal = "a.variable" },
     });
     defer tokens.deinit();
 
     var args_buffer: [2]ArgList = undefined;
-    const args = try parseArgs(tokens.items, &args_buffer, test_allocator);
+    var args = try parseArgs(tokens.items, &args_buffer, test_allocator);
     defer for (0..args.arg_count) |i| {
         args_buffer[i].clearAndFree();
+    };
+    defer if (args.invalid) |*i| {
+        i.deinit(test_allocator);
     };
 
     try expect(args.invalid == null);
@@ -427,16 +441,16 @@ test "parseArgs parses args" {
 test "parseArgs can do invalids" {
     const cases = &[_]TokenList{
         try genTestTokenList(&[_]Token{
-            Token{ .value = "some value" },
+            Token{ .literal = "some value" },
         }),
         try genTestTokenList(&[_]Token{
-            Token{ .value = "some value" },
+            Token{ .literal = "some value" },
             Token{ .keyword = Keyword.SET },
         }),
         try genTestTokenList(&[_]Token{
-            Token{ .value = "some value" },
+            Token{ .literal = "some value" },
             Token{ .whitespace = 2 },
-            Token{ .variable = "some variable" },
+            Token{ .identifier = "some variable" },
         }),
     };
 

@@ -10,22 +10,16 @@ line
     statement comment '000A'
     space line
 
-comment
-    '#' anything
-
-anything
-    character
-    anything anything
 
 statement
     ""
-    "SET" space value space value
+    "SET" argument argument
     print
     request
     do
     exit
-    "WAIT" space value
-    "ERROR" space value
+    "WAIT" argument
+    "ERROR" argument
     assert
     file
     statement space
@@ -33,14 +27,14 @@ statement
 ## Statements
 print
     "PRINT"
-    "PRINT" space value
+    "PRINT" argument
 
 request
     method
-    method space value
-    method space value space value
-    method space value space '(' expression ')' space value
-    method space value space '(' expression ')' space value space '(' expression ')'
+    method argument
+    method argument argument
+    method argument space '(' expression ')' argument
+    method argument space '(' expression ')' argument space '(' expression ')'
 
 method
     "REQUEST"
@@ -54,10 +48,14 @@ method
     "CONNECT"
     "PATCH"
 
+function
+    FUN arguments block
+
 do
-    DO space value block
-    DO space value space loop block
-    DO space value space if block
+    DO argument block
+    DO argument space loop block
+    DO argument space if block
+    DO argument FUN arguments
 
 loop
     "UNTIL" '(' expression ')'
@@ -74,28 +72,31 @@ ifelse
 
 exit
     "EXIT"
-    "EXIT" space value
+    "EXIT" argument
 
 assert
-    "ASSERT" space value
+    "ASSERT" argument
     "ASSERT_SUCCESS"
     "ASSERT_REDIRECT"
     "ASSERT_FAILED"
-    "ASSERT_CODE" space value
-    "ASSERT_CONTAINS" space value space value
+    "ASSERT_CODE" argument
+    "ASSERT_CONTAINS" argument argument
     "ASSERT_ERROR" block
 
 block
     space '{' '00A0' lines '}'
 
 file
-    "SCRIPT" space value
-    "IMPORT" space value space value
-    "EXPORT" space value space value
-    "APPEND" space value space value
-    "REPORT" space value
+    "SCRIPT" argument
+    "IMPORT" argument argument
+    "EXPORT" argument argument
+    "APPEND" argument argument
+    "REPORT" argument
 
 ## Values
+
+argument
+    space value
 
 value
     literal
@@ -113,9 +114,18 @@ expression
     quoted
     operator expression
     expression '00A0'
+    expression comment '00A0'
     '00A0' expression
     expression space
     space expression
+
+comment
+    '#' anything
+    space '#' anything
+
+anything
+    character
+    anything anything
 
 identifiers
     identifier
@@ -135,22 +145,22 @@ alphanumeric
     alphanumeric alphanumeric
 
 quoted
-    ''' squoutables '''
-    '"' dquoutables '''
+    ''' squotables '''
+    '"' dquotables '''
 
-squoutables
-    squoutable
-    squoutable squoutables
+squotables
+    squotable
+    squotable squotables
 
-squoutable
+squotable
     '00A0'
     character - '''
 
-dquoutables
-    dquoutable
-    dquoutable dquoutables
+dquotables
+    dquotable
+    dquotable dquotables
 
-dquoutable
+dquotable
     '00A0'
     character - '"'
 
@@ -169,7 +179,9 @@ operator
     '|'
     '&'
     '^'
+
 space
     '0020'
+    '0090'
     space space
 

@@ -369,7 +369,7 @@ test "run can make a request and print the requested url" {
     const cmds = [_]String{
         "GET http://localhost:9009",
         "PRINT Done",
-        "PRINT Made' a '{{last_request.method}}' request to '{{ last_request.url }}",
+        "PRINT Made' a '(last_request.method)' request to '( last_request.url )",
     };
     var test_ui = makeTestUi(&cmds);
     defer test_ui.testing.deinit();
@@ -385,21 +385,21 @@ test "run can make a request and print the requested url" {
 test "run can set and print variables" {
     const cmds = [_]String{
         "SET hello world",
-        "PRINT {{ hello }}",
-        "SET hello2 {{hello}}",
-        "PRINT {{hello2}}",
+        "PRINT ( hello )",
+        "SET hello2 (hello)",
+        "PRINT (hello2)",
         "SET hello.world hello",
-        "PRINT {{hello.world}}",
+        "PRINT (hello.world)",
         "SET hello.world hello1",
         "SET hello.world2 hello2",
-        "PRINT {{hello.world}}",
-        "PRINT {{hello.world2}}",
+        "PRINT (hello.world)",
+        "PRINT (hello.world2)",
         "SET hello.world.my.name.is hello4",
         "SET hello.world2 hello3",
-        "PRINT {{hello.world2}}",
-        "PRINT {{hello.world.my.name.is}}",
+        "PRINT (hello.world2)",
+        "PRINT (hello.world.my.name.is)",
         "SET hello.world ",
-        "PRINT {{hello.world.my.name.is}}",
+        "PRINT (hello.world.my.name.is)",
     };
     var test_ui = makeTestUi(&cmds);
     defer test_ui.testing.deinit();

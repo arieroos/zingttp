@@ -108,6 +108,10 @@ pub fn containsOnly(haystack: String, needles: String) bool {
     return true;
 }
 
+pub fn indexOfScalar(haystack: String, needle: u8) ?usize {
+    return mem.indexOfScalar(u8, haystack, needle);
+}
+
 pub fn toOwned(val: String, allocator: Allocator) Allocator.Error!String {
     const allocated = try allocator.alloc(u8, val.len);
     mem.copyForwards(u8, allocated, val);
