@@ -1,0 +1,149 @@
+# Comment
+
+# Defining values
+PRINT value  # Resolves to string "value"
+PRINT "string value"  # Resolves to "string value"
+PRINT (expression)  # Resolves to the result of the expression
+PRINT ("string in expression")  # Resolves to "string in expression"
+PRINT (
+	"multiline " +
+	"expression"
+)  # Resolves to "multiline expression"
+PRINT ("nested" + ("expression"))  # Resolves to "nestedexpression"
+
+# Setting variables
+SET variable value
+SET map.value value
+SET list.0 value
+SET list._END value
+
+# variable types
+SET null NULL
+SET boolean false
+SET integer 3
+SET float 3.6
+SET map.value 99
+SET list._LEN s
+
+# Special variables
+PRINT (_KEYS)  # All variable keys in current namesapce
+PRINT (_VALS)  # All variable values (no keys) in current namespace
+PRINT (map._KEYS)  # Keys in the map
+PRINT (map._VALS)  # Values in the map (no keys)
+PRINT (list._END)  # Last index of the list (list._LEN - 1)
+PRINT (list._LEN)  # Length of the list (list._END + 1)
+PRINT (list._LAST)  # Length of the last value in the list.(list._END)
+PRINT (expression._BOOL)  # null(null), false(boolean), 0(integer or float), "" (string), [] (list), or () (map) evaluates to false, anything else to true
+PRINT (expression._INT)  # attempts to convert expression to int
+PRINT (expression._FLOAT)  # attempts to convert expression to float
+PRINT (expression._STRING)  # converts expression to string
+PRINT (expression._LIST)  # converts expression to one element list
+PRINT (_JSON.expression)  # Jsonifies expression
+PRINT (expression._JSON)  # Parses expression as JSON
+PRINT (_XML.map)  # Converts map to XML
+PRINT (expression._XML)  # Parses expression as XML
+PRINT (expression._TYPE)  # A string value: "null", "boolean", "integer", "float", "string", "list", or "map"
+
+PRINT (_LAST_REQUEST)  # Details from the previous request
+PRINT (_NEXT_REQUEST)  # Settings for the next request
+PRINT (_OPTIONS.header_buffer_size_kb)  # How much space any response's header might take
+PRINT (_OPTIONS.max_response_mem_mb)  # Responses up to this size will be kept in memory, otherwise it will be written to a file or streamed
+PRINT (_done) # 
+
+# Ouputting values to configured output
+PRINT  # Prints entire variable tree
+PRINT value
+
+# Preparing a request
+SET _NEXT_REQUEST.method GET
+SET _NEXT_REQUEST.url https://google.com/
+SET _NEXT_REQUEST.headers (map)
+SET _NEXT_REQUEST.body value
+SET _NEXT_REQUEST.redirect value
+
+# Making a request
+REQUEST  # makes a request with prepared values
+POST  # makes a POST with prepared values
+POST url  # makes a POST request to url
+POST url body  # makes a POST request with body to url
+POST url (map) body  # makes a POST request to body with values, using map as headers
+POST url (map) body (redirect) # makes a POST request to body with values, using map as headers, following redirects if redirect is truthy
+
+# Sub Routines
+DO context {
+	# Valid Script
+	PRINT (..variable)  # Use .. to refer to parent context
+	EXIT  # EXITS the current context
+}  # Runs the script. All variables assigned becomes children of context map
+
+DO context WHILE(expression) {
+	# Valid script
+	PRINT (count)
+}  # Runs in a loop until expression.BOOL resolves to false
+
+DO context UNTIL(expression) {
+	# Valid script
+	PRINT (count)
+}  # Runs in a loop until expression.BOOL resolves to true
+
+DO context FOR(list) {
+	# Valid script
+	PRINT (count)
+	PRINT (index)
+	PRINT (item)
+}  # Loops over list in expression. Each item in list is copied to context.item, and the corresponding index to context.index
+
+DO context FOR(map) {
+	# Valid script
+	PRINT (count)
+	PRINT (key)
+	PRINT (value)
+}  # Loops over list in expression. Each item in list is copied to context.item, and the corresponding index to context.index
+
+DO context IF(expression) {
+	# Valid script
+} ELSE IF(expression) {
+	# Valid Script
+} ELSE {
+	# Valid Script
+}  # Acts like an if statement
+
+DO context CONCURRENT {
+	# Valid Script
+	WAIT 1
+	ERROR "should be cancelled"
+}  # Keep running outer scope while inner scope is running
+EXIT {context}  # EXITS the specified context
+
+FUN name arg_name {
+	# Valid Script
+	PRINT (name)
+	PRINT (arg_name)
+	PRINT (args.1)
+} # Declaring a function
+
+DO context FUN name arg_0 arg_1 arg_n # Calling a function
+
+# Control
+WAIT value  # waits value._FLOAT seconds
+ERROR value  # raises an error
+
+# Asserts
+ASSERT value  # Assert that value.BOOL resolves to true
+ASSERT_SUCCESS  # Assert that _LAST_REQUEST is successful (response code 200 - 299)
+ASSERT_REDIRECT  # Assert that _LAST_REQUEST is not successful (response code 300 - 399)
+ASSERT_FAILED  # Assert that _LAST_REQUEST is not successful (response code 400 - 599)
+ASSERT_RANGE code  # ASSERT that _LAST_REQUEST.response.code >= code and < code + 100
+ASSERT_CODE code  # Assert that _LAST_REQUEST has the expected code
+ASSERT_CONTAINS value_haystack value_needle  # Assert that value_haystack.STRING contains value_haystack.STRING
+ASSERT_ERROR context {
+	# Valid Script
+}  # Asserts that an error is thrown during script
+
+# Working with files
+SCRIPT file_name  # executes the file at file_name as a script in the current context
+IMPORT variable file_name  # stores the content of file_name in variable as a string
+EXPORT variable file_name  # stores variable.STRING in file_name
+APPEND variable file_name  # appends variable.STRING to the content of file_name
+REPORT file_name  #  Starts appending request metadata to the end of file_name as csv data
+
