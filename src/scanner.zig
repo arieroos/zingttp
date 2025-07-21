@@ -114,13 +114,13 @@ var scanner: Scanner = Scanner{};
 
 pub fn scan(line: String, allocator: Allocator) !TokenList {
     var token_list = TokenList.init(allocator);
-    try continueScan(line, &token_list);
+    try continueScan(line, &token_list, allocator);
     return token_list;
 }
 
-pub fn continueScan(line: String, token_list: *TokenList) !void {
+pub fn continueScan(line: String, token_list: *TokenList, allocator: Allocator) !void {
     scanner.newLine(line);
-    while (try scanner.scanNextToken(test_allocator)) |token| {
+    while (try scanner.scanNextToken(allocator)) |token| {
         try token_list.append(token);
         switch (token.token) {
             .invalid => break,
@@ -562,7 +562,7 @@ test continueScan {
         defer deinitTokenList(&tokens);
 
         for (lines) |line| {
-            try continueScan(line, &tokens);
+            try continueScan(line, &tokens, test_allocator);
         }
 
         try expectTokenToBeBracketAt(tokens.items[0], .{ .expression = true }, 0);
@@ -586,7 +586,7 @@ test continueScan {
         defer deinitTokenList(&tokens);
 
         for (lines) |line| {
-            try continueScan(line, &tokens);
+            try continueScan(line, &tokens, test_allocator);
         }
 
         try expectTokenToBeKeywordAt(tokens.items[0], Keyword.DO, 0);
@@ -620,7 +620,7 @@ test continueScan {
         defer deinitTokenList(&tokens);
 
         for (lines) |line| {
-            try continueScan(line, &tokens);
+            try continueScan(line, &tokens, test_allocator);
         }
 
         try expectTokenToBeKeywordAt(tokens.items[0], Keyword.FUN, 0);
