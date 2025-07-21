@@ -58,13 +58,6 @@ pub const Token = union(enum) {
     subroutine: bool,
 
     invalid: String,
-
-    pub fn isKeyword(self: Token, keyword: Keyword) bool {
-        return switch (self) {
-            .keyword => self.keyword == keyword,
-            else => false,
-        };
-    }
 };
 
 pub const TokenInfo = struct {

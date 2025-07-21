@@ -241,6 +241,19 @@ pub fn run(ui: *UserInterface, allocator: Allocator) !void {
         debug.println("Processing line: {s}", .{line});
 
         const tokens = try scanner.scan(line, arena_alloc);
+        if (debug.isActive()) {
+            @branchHint(std.builtin.BranchHint.cold);
+
+            var tokens_str = StringBuilder.init(arena_alloc);
+            for (tokens.items) |item| {
+                if (tokens_str.items.len > 0) {
+                    try tokens_str.appendSlice(", ");
+                }
+                try tokens_str.appendSlice(@tagName(item.token));
+            }
+            debug.println("Tokens: {s}", .{tokens_str.items});
+        }
+
         const expression = try parser.parse(tokens, arena_alloc);
 
         switch (expression) {
