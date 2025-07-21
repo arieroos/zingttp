@@ -1,7 +1,7 @@
 const std = @import("std");
 const stderr = std.io.getStdErr().writer();
 
-const scanner = @import("scanner.zig");
+const tokens = @import("tokens.zig");
 const strings = @import("strings.zig");
 const StringBuilder = strings.StringBuilder;
 
@@ -61,7 +61,7 @@ pub fn println0(comptime str: []const u8) void {
     println(str, .{});
 }
 
-pub fn debugTokenList(tokens: scanner.TokenList, allocator: std.mem.Allocator) void {
+pub fn debugTokenList(token_list: tokens.TokenList, allocator: std.mem.Allocator) void {
     if (!active)
         return
     else {
@@ -70,11 +70,11 @@ pub fn debugTokenList(tokens: scanner.TokenList, allocator: std.mem.Allocator) v
         var tokens_str = StringBuilder.init(allocator);
         defer tokens_str.deinit();
 
-        for (tokens.items) |item| {
+        for (token_list.items) |item| {
             if (tokens_str.items.len > 0) {
                 tokens_str.appendSlice(", ") catch {};
             }
-            tokens_str.appendSlice(@tagName(item.token)) catch {};
+            tokens_str.appendSlice(@tagName(item.value)) catch {};
         }
         println("Tokens: {s}", .{tokens_str.items});
     }
