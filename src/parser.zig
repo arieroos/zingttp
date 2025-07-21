@@ -291,7 +291,7 @@ fn genTestTokenList(tokens: []const Token) !TokenList {
     return tokenList;
 }
 
-fn expectArgumentAt(args: Values, idx: usize, val: String) !void {
+fn expectValueAt(args: Values, idx: usize, val: String) !void {
     try expect(args.items.len > idx);
     const arg = args.items[idx];
 
@@ -331,7 +331,7 @@ test parse {
         defer expression.deinit(test_allocator);
 
         try expectEqualStrings("POST", expression.request.method);
-        try expectArgumentAt(expression.request.value, 0, "http://some_url.com");
+        try expectValueAt(expression.request.value, 0, "http://some_url.com");
     }
     {
         var tokens = try genTestTokenList(&[_]Token{
@@ -362,9 +362,9 @@ test parse {
         var expression = try parse(tokens, test_allocator);
         defer expression.deinit(test_allocator);
 
-        try expectArgumentAt(expression.print, 0, "gg");
-        try expectArgumentAt(expression.print, 1, "some.variable");
-        try expectArgumentAt(expression.print, 2, "ggg");
+        try expectValueAt(expression.print, 0, "gg");
+        try expectValueAt(expression.print, 1, "some.variable");
+        try expectValueAt(expression.print, 2, "ggg");
     }
     {
         var tokens = try genTestTokenList(&[_]Token{
@@ -380,9 +380,9 @@ test parse {
         var expression = try parse(tokens, test_allocator);
         defer expression.deinit(test_allocator);
 
-        try expectArgumentAt(expression.set.variable, 0, "gg");
-        try expectArgumentAt(expression.set.value, 0, "some.variable");
-        try expectArgumentAt(expression.set.value, 1, ".literal");
+        try expectValueAt(expression.set.variable, 0, "gg");
+        try expectValueAt(expression.set.value, 0, "some.variable");
+        try expectValueAt(expression.set.value, 1, ".literal");
     }
 }
 
