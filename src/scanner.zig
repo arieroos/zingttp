@@ -160,7 +160,7 @@ const Scanner = struct {
         }
         if (Operator.isOp(c)) {
             self.advance();
-            return try self.genToken(.{ .operator = c }, allocator);
+            return try self.genToken(.{ .operator = Operator.toOp(c) }, allocator);
         }
         if (c == '#') {
             return null;
@@ -345,7 +345,7 @@ fn expectTokenToBeIdAt(token: Token, value: []const String, position: usize) !vo
 fn expectTokenToBeOpAt(token: Token, value: u8, position: usize) !void {
     switch (token.value) {
         .operator => |val| {
-            try expect(val == value);
+            try expect(val == Operator.toOp(value));
             try expectPos(position, token.pos);
         },
         else => {
@@ -629,7 +629,7 @@ test "scan correctly scans values" {
         .{ .tst = "(\"nested\" + (expression))", .exp = &[_]TokenValue{
             .{ .expression = true },
             .{ .quoted = "nested" },
-            .{ .operator = '+' },
+            .{ .operator = Operator.toOp('+') },
             .{ .expression = true },
             .{ .identifiers = &[_]String{"expression"} },
             .{ .expression = false },

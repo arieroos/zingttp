@@ -69,7 +69,7 @@ pub const Operator = enum(u8) {
     pub fn toOp(c: u8) Operator {
         std.debug.assert(isOp(c));
 
-        return @enumFromInt(strings.indexOfScalar(operators, c));
+        return @enumFromInt(strings.indexOfScalar(operators, c).?);
     }
 
     pub fn toString(self: Operator) String {
@@ -97,7 +97,7 @@ pub const TokenValue = union(enum) {
     literal: String,
     quoted: String,
     identifiers: []const String,
-    operator: u8,
+    operator: Operator,
 
     whitespace: usize,
     expression: bool,
