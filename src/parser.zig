@@ -65,6 +65,7 @@ const InvalidReason = enum {
     UnexpectedToken,
     ExpectedOther,
     MissingToken,
+    InvalidArgCount,
 };
 
 fn InvalidArgs(comptime reason: InvalidReason) type {
@@ -83,26 +84,30 @@ fn InvalidArgs(comptime reason: InvalidReason) type {
             expected: String,
             pos: usize,
         },
+        .InvalidArgCount => struct {
+            expected: usize,
+            got: usize,
+        },
         inline else => struct {},
     };
 }
 
-pub fn parse(tokenList: TokenList, allocator: Allocator) !Statement {
-    const token_list = tokenList.items;
-    if (token_list.len < 1) {
+pub fn parse(token_list: TokenList, allocator: Allocator) !Statement {
+    const token_slice = token_list.items;
+    if (token_slice.len < 1) {
         return Statement.nothing;
     }
 
-    const keyword = switch (token_list[0].value) {
-        .keyword => token_list[0].value.keyword,
+    const keyword = switch (token_slice[0].value) {
+        .keyword => token_slice[0].value.keyword,
         else => return genInvalidStatement(InvalidReason.ShouldStartWithKeyword, .{}, allocator),
     };
 
-    const arguments = token_list[1..];
+    const arguments = token_slice[1..];
     return switch (keyword) {
         .EXIT => parseExit(arguments, allocator),
         .PRINT => parsePrint(arguments, allocator),
-        .SET => parseSet(token_list[0], arguments, allocator),
+        .SET => parseSet(token_slice[0], arguments, allocator),
         .GET,
         .POST,
         .PUT,
@@ -111,10 +116,10 @@ pub fn parse(tokenList: TokenList, allocator: Allocator) !Statement {
         .OPTIONS,
         .TRACE,
         .CONNECT,
-        => parseMethod(token_list[0], arguments, allocator),
+        => parseMethod(token_slice[0], arguments, allocator),
         else => genInvalidStatement(
             InvalidReason.UnexpectedToken,
-            .{ .pos = 0, .lexeme = token_list[0].lexeme },
+            .{ .pos = 0, .lexeme = token_slice[0].lexeme },
             allocator,
         ),
     };
@@ -136,14 +141,12 @@ fn parseExit(arguments: []Token, allocator: Allocator) Statement {
 
 fn parsePrint(arguments: []Token, allocator: Allocator) !Statement {
     var arg_buffer: [1]Values = undefined;
-    const args = try parseArgs(arguments, &arg_buffer, allocator);
+    var args = try parseArgs(arguments, &arg_buffer, allocator);
     if (args.invalid) |i| {
-        for (arg_buffer[0..args.arg_count]) |*a| {
-            a.clearAndFree();
-        }
+        args.deinitArgBuffer();
         return i;
     }
-    if (args.arg_count == 0) {
+    if (args.parsed_args == 0) {
         arg_buffer[0] = Values.init(allocator);
     }
 
@@ -152,15 +155,13 @@ fn parsePrint(arguments: []Token, allocator: Allocator) !Statement {
 
 fn parseSet(token: Token, arguments: []Token, allocator: Allocator) !Statement {
     var arg_buffer: [2]Values = undefined;
-    const args = try parseArgs(arguments, &arg_buffer, allocator);
+    var args = try parseArgs(arguments, &arg_buffer, allocator);
     if (args.invalid) |i| {
-        for (arg_buffer[0..args.arg_count]) |*a| {
-            a.clearAndFree();
-        }
+        args.deinitArgBuffer();
         return i;
     }
 
-    if (args.arg_count == 0 or arg_buffer[0].items.len == 0) {
+    if (args.parsed_args == 0 or arg_buffer[0].items.len == 0) {
         return genInvalidStatement(
             InvalidReason.MissingToken,
             .{
@@ -171,21 +172,19 @@ fn parseSet(token: Token, arguments: []Token, allocator: Allocator) !Statement {
         );
     }
 
-    const value_args = if (args.arg_count == 2) arg_buffer[1] else Values.init(allocator);
+    const value_args = if (args.parsed_args == 2) arg_buffer[1] else Values.init(allocator);
     return Statement{ .set = .{ .variable = arg_buffer[0], .value = value_args } };
 }
 
 fn parseMethod(token: Token, arguments: []Token, allocator: Allocator) !Statement {
     var arg_buffer: [1]Values = undefined;
-    const args = try parseArgs(arguments, &arg_buffer, allocator);
+    var args = try parseArgs(arguments, &arg_buffer, allocator);
     if (args.invalid) |i| {
-        for (arg_buffer[0..args.arg_count]) |*a| {
-            a.clearAndFree();
-        }
+        args.deinitArgBuffer();
         return i;
     }
 
-    return if (args.arg_count == 1 and arg_buffer[0].items.len > 0)
+    return if (args.parsed_args == 1 and arg_buffer[0].items.len > 0)
         Statement{ .request = .{
             .method = @tagName(token.value.keyword),
             .value = arg_buffer[0],
@@ -201,59 +200,178 @@ fn parseMethod(token: Token, arguments: []Token, allocator: Allocator) !Statemen
         );
 }
 
-const GetArgResult = struct {
-    invalid: ?Statement = null,
-    arg_count: usize,
+fn parseArgs(arguments: []Token, arg_buffer: []Values, allocator: Allocator) !Args {
+    if (arguments.len == 0) {
+        return Args{
+            .current_token = undefined,
+            .allocator = allocator,
+            .token_list = arguments,
+            .arg_buffer = arg_buffer,
+        };
+    }
 
-    fn initInvalid(count: usize, token: Token, allocator: Allocator) GetArgResult {
-        return GetArgResult{
-            .invalid = genInvalidStatement(
+    var args = Args.init(arguments, arg_buffer, allocator);
+    try args.parse();
+
+    return args;
+}
+
+const Args = struct {
+    current_idx: usize = 0,
+    line_ended: bool = false,
+    invalid: ?Statement = null,
+    parsed_args: usize = 0,
+    token_list: []Token,
+    allocator: Allocator,
+    current_token: *Token,
+    arg_buffer: []Values,
+
+    pub fn init(token_list: []Token, arg_buffer: []Values, allocator: Allocator) Args {
+        std.debug.assert(token_list.len > 0);
+        return Args{
+            .token_list = token_list,
+            .allocator = allocator,
+            .current_token = &token_list[0],
+            .arg_buffer = arg_buffer,
+        };
+    }
+
+    pub fn deinitArgBuffer(self: *Args) void {
+        for (0..self.parsed_args) |i| {
+            deinitValues(&self.arg_buffer[i], self.allocator);
+        }
+    }
+
+    pub fn parse(self: *Args) !void {
+        if (self.token_list.len == 0) {
+            return;
+        }
+        if (self.current_token.value != .whitespace) {
+            const token = self.current_token;
+            self.invalid = genInvalidStatement(
                 InvalidReason.ExpectedOther,
                 .{
-                    .expected = "value or variable",
+                    .expected = "whitespace",
                     .found = @tagName(token.value),
                     .pos = token.pos,
                     .lexeme = token.lexeme,
                 },
-                allocator,
-            ),
-            .arg_count = count,
-        };
-    }
-};
+                self.allocator,
+            );
+            return;
+        }
+        var arg_idx: usize = 0;
+        var current_args: *Values = undefined;
 
-fn parseArgs(token_list: []Token, arg_buffer: []Values, allocator: Allocator) !GetArgResult {
-    if (token_list.len == 0) {
-        return GetArgResult{ .arg_count = 0 };
-    }
-    if (token_list[0].value != .whitespace) {
-        return GetArgResult.initInvalid(0, token_list[0], allocator);
-    }
-    arg_buffer[0] = Values.init(allocator);
+        while (self.advance()) {
+            const token = self.current_token;
+            switch (token.value) {
+                .whitespace => {
+                    if (arg_idx == self.arg_buffer.len) {
+                        self.invalid = genInvalidStatement(
+                            .InvalidArgCount,
+                            .{
+                                .expected = self.arg_buffer.len,
+                                .got = arg_idx + 1,
+                            },
+                            self.allocator,
+                        );
+                    }
 
-    const max_args = arg_buffer.len;
-    var idx: usize = 0;
-    for (token_list[1..]) |token| {
-        switch (token.value) {
-            .whitespace => {
-                idx += 1;
-                if (idx == max_args)
-                    return GetArgResult.initInvalid(idx, token, allocator);
+                    self.arg_buffer[arg_idx] = Values.init(self.allocator);
+                    current_args = &self.arg_buffer[arg_idx];
+                    arg_idx += 1;
+                    self.parsed_args = arg_idx;
+                },
+                inline .literal, .quoted => |v| try current_args.append(Value{ .value = v }),
+                .expression => {
+                    const expression = try self.parseExpression();
+                    try current_args.append(Value{ .expession = expression });
+                },
+                else => {
+                    self.invalid = genInvalidStatement(
+                        InvalidReason.ExpectedOther,
+                        .{
+                            .expected = "space or value",
+                            .found = @tagName(token.value),
+                            .pos = token.pos,
+                            .lexeme = token.lexeme,
+                        },
+                        self.allocator,
+                    );
+                },
+            }
 
-                std.debug.assert(idx < max_args);
-                arg_buffer[idx] = Values.init(allocator);
-            },
-            inline .literal, .quoted => |v| try arg_buffer[idx].append(Value{ .value = v }),
-            //         .identifiers => |v| try arg_buffer[idx].append(Value{ .variable = v[0] }),
-            .expression => continue,
-            else => {
-                return GetArgResult.initInvalid(idx + 1, token, allocator);
-            },
+            if (self.invalid != null) return;
         }
     }
 
-    return GetArgResult{ .arg_count = idx + 1 };
-}
+    fn advance(self: *Args) bool {
+        if (self.current_idx >= self.token_list.len) return false;
+
+        self.current_token = &self.token_list[self.current_idx];
+        self.current_idx += 1;
+        return true;
+    }
+
+    fn parseExpression(self: *Args) !Expression {
+        std.debug.assert(self.current_token.value == .expression and self.current_token.value.expression);
+
+        var expression_level: usize = 1;
+        var output = std.ArrayList(*Token).init(self.allocator);
+        errdefer output.deinit();
+        var op_stack = std.ArrayList(*Token).init(self.allocator);
+        defer op_stack.deinit();
+
+        while (self.advance()) {
+            const token = self.current_token;
+            switch (token.value) {
+                .identifiers, .quoted => try output.append(token),
+                .operator => |op| {
+                    while (op_stack.items.len > 0) {
+                        const item = op_stack.items[op_stack.items.len - 1].value;
+                        if (item != .operator) break;
+                        if (op.order() < item.operator.order()) break;
+                        try output.append(op_stack.pop().?);
+                    }
+                    try op_stack.append(token);
+                },
+                .expression => |e| if (e) {
+                    expression_level += 1;
+                    try op_stack.append(token);
+                } else {
+                    while (op_stack.pop()) |o| {
+                        if (o.value == .expression) {
+                            break;
+                        }
+                        try output.append(o);
+                    }
+                    expression_level -= 1;
+                    if (expression_level == 0) {
+                        // End of expression
+                        break;
+                    }
+                    if (expression_level < 1) {
+                        return error.UnmatchedParenthesis;
+                    }
+                },
+                else => return error.UnexpectedToken,
+            }
+        }
+
+        while (op_stack.pop()) |o| {
+            if (o.value == .expression) {
+                if (op_stack.items.len != 0) {
+                    return error.UnmatchedParenthesis;
+                }
+                continue;
+            }
+            try output.append(o);
+        }
+
+        return try output.toOwnedSlice();
+    }
+};
 
 fn genInvalidStatement(
     comptime reason: InvalidReason,
@@ -265,6 +383,7 @@ fn genInvalidStatement(
         .UnexpectedToken => "Unexpected token at {}: \"{s}\"",
         .ExpectedOther => "Expected {s} but found {s} at {}: \"{s}\"",
         .MissingToken => "Missing {s} at {}",
+        .InvalidArgCount => "Expected {} arguments, got {}",
     };
 
     const msg = std.fmt.allocPrint(
@@ -273,45 +392,6 @@ fn genInvalidStatement(
         args,
     ) catch "Not enough memory to store invalid reason.";
     return Statement{ .invalid = msg };
-}
-
-fn parseExpression(token_list: []Token, allocator: std.mem.Allocator) !Expression {
-    var output = try std.ArrayList(*Token).initCapacity(allocator, token_list.len);
-    var op_stack = std.ArrayList(*Token).init(allocator);
-    defer op_stack.deinit();
-
-    for (token_list) |*token| {
-        switch (token.value) {
-            .identifiers, .quoted => output.appendAssumeCapacity(token),
-            .operator => |op| {
-                while (op_stack.items.len > 0) {
-                    const item = op_stack.items[op_stack.items.len - 1].value;
-                    if (item != .operator) break;
-                    if (op.order() < item.operator.order()) break;
-                    output.appendAssumeCapacity(op_stack.pop().?);
-                }
-                try op_stack.append(token);
-            },
-            .expression => |e| if (e) try op_stack.append(token) else {
-                while (op_stack.pop()) |o| {
-                    if (o.value == .expression) {
-                        break;
-                    }
-                    output.appendAssumeCapacity(o);
-                }
-            },
-            else => return error.UnexpectedToken,
-        }
-    }
-    while (op_stack.pop()) |o| {
-        if (o.value == .expression) {
-            std.debug.assert(op_stack.items.len == 0);
-            continue;
-        }
-        output.appendAssumeCapacity(o);
-    }
-
-    return try output.toOwnedSlice();
 }
 
 const expect = std.testing.expect;
@@ -361,7 +441,14 @@ fn expectValueAt(args: Values, idx: usize, val: String) !void {
 
     switch (arg) {
         .value => |v| try expectEqualStrings(val, v),
-        .expession => try expect(false),
+        .expession => try expect(true),
+    }
+}
+
+fn expectValidStatement(stmnt: Statement) !void {
+    if (stmnt == .invalid) {
+        std.log.err("Unexpected Invalid Statement: {s}", .{stmnt.invalid});
+        try expect(false);
     }
 }
 
@@ -370,14 +457,14 @@ test parse {
         var noTokens = try TokenList.initCapacity(test_allocator, 0);
         defer noTokens.deinit();
 
-        var expression = try parse(noTokens, test_allocator);
-        defer expression.deinit(test_allocator);
+        var statement = try parse(noTokens, test_allocator);
+        defer statement.deinit(test_allocator);
 
-        try expect(expression == Statement.nothing);
+        try expect(statement == Statement.nothing);
     }
     {
         var exitExprTokens = try genTestTokenList(&[_]TokenValue{.{ .keyword = Keyword.EXIT }});
-        defer exitExprTokens.deinit();
+        defer tokens.deinitTokenList(&exitExprTokens);
 
         var expression = try parse(exitExprTokens, test_allocator);
         defer expression.deinit(test_allocator);
@@ -390,13 +477,14 @@ test parse {
             .{ .whitespace = 1 },
             .{ .literal = "http://some_url.com" },
         });
-        defer postExprTokens.deinit();
+        defer tokens.deinitTokenList(&postExprTokens);
 
-        var expression = try parse(postExprTokens, test_allocator);
-        defer expression.deinit(test_allocator);
+        var statement = try parse(postExprTokens, test_allocator);
+        defer statement.deinit(test_allocator);
 
-        try expectEqualStrings("POST", expression.request.method);
-        try expectValueAt(expression.request.value, 0, "http://some_url.com");
+        try expectValidStatement(statement);
+        try expectEqualStrings("POST", statement.request.method);
+        try expectValueAt(statement.request.value, 0, "http://some_url.com");
     }
     {
         var token_list = try genTestTokenList(&[_]TokenValue{
@@ -404,7 +492,7 @@ test parse {
             .{ .whitespace = 1 },
             .{ .literal = "gg" },
         });
-        defer token_list.deinit();
+        defer tokens.deinitTokenList(&token_list);
 
         var expression = try parse(token_list, test_allocator);
         defer expression.deinit(test_allocator);
@@ -419,17 +507,20 @@ test parse {
             .{ .keyword = Keyword.PRINT },
             .{ .whitespace = 1 },
             .{ .literal = "gg" },
+            .{ .expression = true },
             .{ .identifiers = &[_]String{ "some", "variable" } },
+            .{ .expression = false },
             .{ .quoted = "ggg" },
         });
-        defer token_list.deinit();
+        defer tokens.deinitTokenList(&token_list);
 
-        var expression = try parse(token_list, test_allocator);
-        defer expression.deinit(test_allocator);
+        var statement = try parse(token_list, test_allocator);
+        defer statement.deinit(test_allocator);
 
-        try expectValueAt(expression.print, 0, "gg");
-        try expectValueAt(expression.print, 1, "some.variable");
-        try expectValueAt(expression.print, 2, "ggg");
+        try expectValidStatement(statement);
+        try expectValueAt(statement.print, 0, "gg");
+        try expectValueAt(statement.print, 1, "");
+        try expectValueAt(statement.print, 2, "ggg");
     }
     {
         var token_list = try genTestTokenList(&[_]TokenValue{
@@ -437,23 +528,26 @@ test parse {
             .{ .whitespace = 1 },
             .{ .literal = "gg" },
             .{ .whitespace = 1 },
+            .{ .expression = true },
             .{ .identifiers = &[_]String{ "some", "variable" } },
+            .{ .expression = false },
             .{ .literal = ".literal" },
         });
-        defer token_list.deinit();
+        defer tokens.deinitTokenList(&token_list);
 
-        var expression = try parse(token_list, test_allocator);
-        defer expression.deinit(test_allocator);
+        var statement = try parse(token_list, test_allocator);
+        defer statement.deinit(test_allocator);
 
-        try expectValueAt(expression.set.variable, 0, "gg");
-        try expectValueAt(expression.set.value, 0, "some.variable");
-        try expectValueAt(expression.set.value, 1, ".literal");
+        try expectValidStatement(statement);
+        try expectValueAt(statement.set.variable, 0, "gg");
+        try expectValueAt(statement.set.value, 0, "");
+        try expectValueAt(statement.set.value, 1, ".literal");
     }
 }
 
 test "parse breaks on command without arg" {
     var token_list = try genTestTokenList(&[_]TokenValue{.{ .keyword = Keyword.PUT }});
-    defer token_list.deinit();
+    defer tokens.deinitTokenList(&token_list);
 
     var expression = try parse(token_list, test_allocator);
     defer expression.deinit(test_allocator);
@@ -481,20 +575,18 @@ test "parseArgs parses args" {
         .{ .whitespace = 2 },
         .{ .literal = "a.variable" },
     });
-    defer token_list.deinit();
+    defer tokens.deinitTokenList(&token_list);
 
     var args_buffer: [2]Values = undefined;
     var args = try parseArgs(token_list.items, &args_buffer, test_allocator);
-    defer for (0..args.arg_count) |i| {
-        args_buffer[i].clearAndFree();
-    };
+    defer args.deinitArgBuffer();
     defer if (args.invalid) |*i| {
         i.deinit(test_allocator);
     };
 
     try expect(args.invalid == null);
-    if (args.arg_count != 2) {
-        std.log.err("Expected arg count {}, but got {}\n", .{ 2, args.arg_count });
+    if (args.parsed_args != 2) {
+        std.log.err("Expected arg count {}, but got {}\n", .{ 2, args.parsed_args });
         try expect(false);
     }
     if (args_buffer[0].items.len != 2) {
@@ -520,14 +612,13 @@ test "parseArgs can do invalids" {
         }),
     };
 
-    inline for (cases) |token_list| {
-        defer token_list.deinit();
+    inline for (cases) |case| {
+        var token_list = case;
+        defer tokens.deinitTokenList(&token_list);
 
         var args_buffer: [2]Values = undefined;
-        const args = try parseArgs(token_list.items, &args_buffer, test_allocator);
-        defer for (0..args.arg_count) |i| {
-            args_buffer[i].clearAndFree();
-        };
+        var args = try parseArgs(token_list.items, &args_buffer, test_allocator);
+        defer args.deinitArgBuffer();
 
         try expect(args.invalid != null);
         test_allocator.free(args.invalid.?.invalid);
@@ -612,22 +703,29 @@ test "parseExpression can parse an expression" {
         var token_list = case.token_list;
         defer tokens.deinitTokenList(&token_list);
 
-        const expression = try parseExpression(case.token_list.items, test_allocator);
+        var vals = [_]Values{};
+        var args = Args.init(token_list.items, &vals, test_allocator);
+        const expression = try args.parseExpression();
         defer test_allocator.free(expression);
-
-        var expr_str = strings.StringBuilder.init(test_allocator);
-        defer expr_str.clearAndFree();
-        for (expression) |t| {
-            if (expr_str.items.len > 0) {
-                try expr_str.append(' ');
-            }
-            try expr_str.appendSlice(t.lexeme);
-        }
 
         try expect(expression.len == case.expected.len);
         for (case.expected, expression) |idx, tkn| {
             if (&token_list.items[idx] != tkn) {
+                var expr_str = strings.StringBuilder.init(test_allocator);
+                defer expr_str.clearAndFree();
+                for (token_list.items) |t| {
+                    if (expr_str.items.len > 0) {
+                        try expr_str.append(' ');
+                    }
+                    try expr_str.appendSlice(t.lexeme);
+                }
+                try expr_str.appendSlice(" ->");
+                for (expression) |t| {
+                    try expr_str.append(' ');
+                    try expr_str.appendSlice(t.lexeme);
+                }
                 std.log.err("{s}", .{expr_str.items});
+
                 try expect(false);
             }
         }

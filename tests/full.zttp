@@ -10,6 +10,7 @@ PRINT (
 	"expression"
 )  # Resolves to "multiline expression"
 PRINT ("nested" + ("expression"))  # Resolves to "nestedexpression"
+PRINT value"string value"("expression")  # Resolves to "valuestring valueexpression"
 
 # Setting variables
 SET variable value
