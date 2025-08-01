@@ -38,9 +38,10 @@ pub const SetArgs = struct {
     value: Values,
 };
 
-const Statement = union(enum) {
+pub const Statement = union(enum) {
     nothing: void,
     exit: void,
+    incomplete: void,
     request: Request,
     print: Values,
     set: SetArgs,
@@ -122,6 +123,9 @@ pub fn parse(token_list: TokenList, allocator: Allocator) !Statement {
             .{ .pos = 0, .lexeme = token_slice[0].lexeme },
             allocator,
         ),
+    } catch |err| switch (err) {
+        error.Unclosed => Statement.incomplete,
+        else => err,
     };
 }
 
@@ -211,8 +215,9 @@ fn parseArgs(arguments: []Token, arg_buffer: []Values, allocator: Allocator) !Ar
     }
 
     var args = Args.init(arguments, arg_buffer, allocator);
-    try args.parse();
+    errdefer args.deinitArgBuffer();
 
+    try args.parse();
     return args;
 }
 
@@ -317,7 +322,7 @@ const Args = struct {
     fn parseExpression(self: *Args) !Expression {
         std.debug.assert(self.current_token.value == .expression and self.current_token.value.expression);
 
-        var expression_level: usize = 1;
+        var expression_level: isize = 1;
         var output = std.ArrayList(*Token).init(self.allocator);
         errdefer output.deinit();
         var op_stack = std.ArrayList(*Token).init(self.allocator);
@@ -340,12 +345,6 @@ const Args = struct {
                     expression_level += 1;
                     try op_stack.append(token);
                 } else {
-                    while (op_stack.pop()) |o| {
-                        if (o.value == .expression) {
-                            break;
-                        }
-                        try output.append(o);
-                    }
                     expression_level -= 1;
                     if (expression_level == 0) {
                         // End of expression
@@ -353,6 +352,12 @@ const Args = struct {
                     }
                     if (expression_level < 1) {
                         return error.UnmatchedParenthesis;
+                    }
+                    while (op_stack.pop()) |o| {
+                        if (o.value == .expression) {
+                            break;
+                        }
+                        try output.append(o);
                     }
                 },
                 else => return error.UnexpectedToken,
@@ -362,14 +367,17 @@ const Args = struct {
         while (op_stack.pop()) |o| {
             if (o.value == .expression) {
                 if (op_stack.items.len != 0) {
-                    return error.UnmatchedParenthesis;
+                    return error.Unclosed;
                 }
                 continue;
             }
             try output.append(o);
         }
 
-        return try output.toOwnedSlice();
+        return if (expression_level > 0)
+            return error.Unclosed
+        else
+            try output.toOwnedSlice();
     }
 };
 
@@ -543,6 +551,22 @@ test parse {
         try expectValueAt(statement.set.value, 0, "");
         try expectValueAt(statement.set.value, 1, ".literal");
     }
+    {
+        var token_list = try genTestTokenList(&[_]TokenValue{
+            .{ .keyword = Keyword.SET },
+            .{ .whitespace = 1 },
+            .{ .literal = "gg" },
+            .{ .whitespace = 1 },
+            .{ .expression = true },
+            .{ .identifiers = &[_]String{ "some", "variable" } },
+        });
+        defer tokens.deinitTokenList(&token_list);
+
+        var statement = try parse(token_list, test_allocator);
+        defer statement.deinit(test_allocator);
+
+        try expect(statement == .incomplete);
+    }
 }
 
 test "parse breaks on command without arg" {
@@ -705,6 +729,7 @@ test "parseExpression can parse an expression" {
 
         var vals = [_]Values{};
         var args = Args.init(token_list.items, &vals, test_allocator);
+        try expect(args.advance());
         const expression = try args.parseExpression();
         defer test_allocator.free(expression);
 
